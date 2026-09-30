@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
+import { ModelScriptEditorModal } from "@/components/layout/model-script-editor-modal";
 import type { WorkflowChannelSettings } from "@/components/workflow/workflow-channel-pane";
 import { GrokTtsVoiceSelect } from "@/components/grok-tts-voice-select";
 import { ModelPicker } from "@/components/model-picker";
@@ -47,6 +48,7 @@ export function AppConfigModal() {
     const [loadingModels, setLoadingModels] = useState(false);
     const [savingConfig, setSavingConfig] = useState(false);
     const [modelSelectChannelId, setModelSelectChannelId] = useState("");
+    const [scriptChannelId, setScriptChannelId] = useState("");
     const [workflowEntries, setWorkflowEntries] = useState<WorkflowEntry[]>([]);
     const accountConfigRef = useRef<{ ready: boolean; workflowChannels?: WorkflowChannelData[] }>({ ready: false });
     const [remoteStorageSyncEnabled, setRemoteStorageSyncEnabled] = useState(false);
@@ -79,6 +81,7 @@ export function AppConfigModal() {
     const grokTts = isGrok2APITtsConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
     const geminiTts = isGeminiTtsModel(config.audioModel) && isGeminiConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
     const modelSelectChannel = normalizeLocalChannels(config).find((channel) => channel.id === modelSelectChannelId);
+    const scriptChannel = scriptChannelId ? normalizeLocalChannels(config).find((channel) => channel.id === scriptChannelId) : null;
 
     useEffect(() => {
         setWorkflowEntries([]);
@@ -285,7 +288,10 @@ export function AppConfigModal() {
 
     const confirmLocalModelSelector = (models: string[]) => {
         if (!modelSelectChannelId) return;
-        patchLocalChannel(modelSelectChannelId, { models });
+        const channel = normalizeLocalChannels(config).find((item) => item.id === modelSelectChannelId);
+        // 模型列表变化时同步清掉已删除模型的挂载脚本
+        const modelScripts = channel?.modelScripts ? Object.fromEntries(Object.entries(channel.modelScripts).filter(([model]) => models.includes(model))) : undefined;
+        patchLocalChannel(modelSelectChannelId, { models, ...(channel?.modelScripts ? { modelScripts } : {}) });
         closeLocalModelSelector();
     };
 
@@ -444,6 +450,9 @@ export function AppConfigModal() {
                                             <div className="relative flex flex-wrap gap-2 md:flex-nowrap">
                                                 <Button size="small" onClick={() => openLocalModelSelector(channel)}>
                                                     选择
+                                                </Button>
+                                                <Button size="small" onClick={() => setScriptChannelId(channel.id)}>
+                                                    脚本{Object.keys(channel.modelScripts || {}).length ? ` · ${Object.keys(channel.modelScripts || {}).length}` : ""}
                                                 </Button>
                                                 <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
@@ -633,6 +642,17 @@ export function AppConfigModal() {
                     onCancel={closeLocalModelSelector}
                     onConfirm={confirmLocalModelSelector}
                     onFetchModels={fetchLocalModelList}
+                />
+            ) : null}
+            {scriptChannel ? (
+                <ModelScriptEditorModal
+                    channel={scriptChannel}
+                    onSave={(modelScripts) => {
+                        patchLocalChannel(scriptChannel.id, { modelScripts });
+                        setScriptChannelId("");
+                        message.success("模型脚本已保存");
+                    }}
+                    onCancel={() => setScriptChannelId("")}
                 />
             ) : null}
         </>

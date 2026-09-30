@@ -11,12 +11,13 @@ import { fetchAutoDLWorkflow } from "./autodl";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { autoSyncToCloud, imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, resolveModelScript, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
+import { runModelScript } from "./model-script";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-export type VideoResponse = { id: string; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; workflowRef?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string };
+export type VideoResponse = { id: string; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; workflowRef?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string; scriptTask?: boolean };
 type ApiVideoEnvelope = { code: number; data?: VideoResponse | VideoResponse[] | null; msg?: string; message?: string };
 type ApiVideoResponse = VideoResponse | ApiVideoEnvelope;
 export type VideoGenerationResult = { id: string; url: string; durationMs: number; width: number; height: number; bytes: number; mimeType: string; task: VideoResponse };
@@ -110,6 +111,8 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
     const model = config.model || config.videoModel;
     const systemPrompt = (config.systemPrompts.video || config.systemPrompt).trim();
+    const script = config.channelMode === "local" ? resolveModelScript(config, model) : "";
+    if (script) return createScriptVideoGenerationTask(config, model, script, systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, normalizeVideoReferenceInput(references), onProgress);
     const body = await createVideoRequestBody(config, model, systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, normalizeVideoReferenceInput(references));
     const startedAt = Date.now();
     try {
@@ -138,11 +141,85 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     }
 }
 
+/** 模型挂载了自定义脚本时，由脚本完成创建和轮询，返回已完成的任务。 */
+async function createScriptVideoGenerationTask(config: AiConfig, model: string, script: string, prompt: string, input: Required<VideoReferenceInput>, onProgress?: VideoProgressHandler): Promise<CreatedVideoGenerationTask> {
+    const startedAt = Date.now();
+    try {
+        const channel = localChannelForActiveModel({ ...config, model });
+        if (!channel) throw new Error("未找到模型所在的本地渠道");
+        const imageItems = [...(input.firstFrame ? [input.firstFrame] : []), ...(input.lastFrame ? [input.lastFrame] : []), ...input.references];
+        const images = await Promise.all(imageItems.map((image) => imageToDataUrl(image)));
+        const videos = await Promise.all(input.videoReferences.map((video) => scriptReferenceToFile(video, "ref.mp4")));
+        const audios = await Promise.all(input.audioReferences.map((audio) => scriptReferenceToFile(audio, "ref.mp3")));
+        const mode = input.firstFrame || input.lastFrame ? "frames" : imageItems.length || videos.length || audios.length ? "reference" : "text";
+        const result = await runModelScript({
+            capability: "video",
+            script,
+            config: { baseUrl: channel.baseUrl, apiKey: channel.apiKey, model, systemPrompt: config.systemPrompts.video || config.systemPrompt },
+            prompt,
+            images,
+            videos,
+            audios,
+            params: {
+                mode,
+                seconds: normalizeVideoSeconds(config.videoSeconds),
+                ratio: config.size,
+                resolution: config.vquality,
+                generateAudio: boolConfig(config.videoGenerateAudio, true),
+                watermark: boolConfig(config.videoWatermark, false),
+            },
+        });
+        const videoUrl = await resolveScriptVideoUrl(result);
+        if (!videoUrl) throw new Error("模型脚本没有返回视频");
+        const id = `script-${startedAt.toString(36)}`;
+        const task = await syncGeneratedVideo({ id, task_id: id, status: "completed", progress: 100, model, video_url: videoUrl, url: videoUrl, scriptTask: true }, config);
+        onProgress?.(100, task);
+        return { task, pollId: id, startedAt, requestBody: { protocol: "script" } };
+    } catch (error) {
+        const { message, detail } = readAxiosError(error, "视频生成失败");
+        void writeVideoAICallLog(config, model, "/videos", "POST", startedAt, 0, stringifyLogPayload({ script: true }), stringifyLogPayload(detail), message);
+        throw new VideoRequestError(message, detail);
+    }
+}
+
+function scriptReferenceToFile(item: { name?: string; type?: string; url?: string; storageKey?: string }, fallbackName: string): Promise<File> {
+    return (async () => {
+        const url = await resolveMediaUrl(item.storageKey, item.url || "");
+        if (!url) throw new Error("参考素材不可用");
+        const blob = await (await fetch(url)).blob();
+        if (!blob.size) throw new Error("参考素材不可用");
+        return new File([blob], item.name || fallbackName, { type: item.type || blob.type || "application/octet-stream" });
+    })();
+}
+
+async function resolveScriptVideoUrl(result: unknown): Promise<string> {
+    if (result instanceof Blob) return uploadScriptVideoBlob(result);
+    if (typeof result === "string" && result.trim()) return result.trim();
+    if (result && typeof result === "object") {
+        const record = result as Record<string, unknown>;
+        if (record.blob instanceof Blob) return uploadScriptVideoBlob(record.blob);
+        const url = [record.url, record.video_url, record.result_url].find((value) => typeof value === "string" && value.trim());
+        if (url) return (url as string).trim();
+    }
+    return "";
+}
+
+async function uploadScriptVideoBlob(blob: Blob): Promise<string> {
+    const objectUrl = URL.createObjectURL(blob);
+    const uploaded = await uploadRemoteMediaToServer(objectUrl, `script-video-${Date.now()}.mp4`).catch(() => null);
+    return uploaded?.url || objectUrl;
+}
+
 function normalizeVideoTaskCreateOptions(options?: string | VideoTaskCreateOptions): VideoTaskCreateOptions {
     return typeof options === "string" ? { clientTaskId: options } : options || {};
 }
 
 export async function pollCreatedVideoGenerationTask(config: AiConfig, task: VideoResponse, { startedAt = Date.now(), requestBody, initialDelayMs = 0, onProgress, onPoll }: { startedAt?: number; requestBody?: unknown; initialDelayMs?: number; onProgress?: VideoProgressHandler; onPoll?: (task: VideoResponse) => void } = {}) {
+    if (task.scriptTask) {
+        const videoUrl = task.video_url || task.url || "";
+        if (!videoUrl) throw new VideoRequestError("视频生成完成但没有返回视频地址", task);
+        return buildVideoGenerationResult(task, videoUrl, Date.now() - startedAt);
+    }
     const model = config.model || config.videoModel;
     const pollId = videoPollId(model, task);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
@@ -179,6 +256,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
 }
 
 export async function pollVideoGenerationTaskStatus(config: AiConfig, task: VideoResponse) {
+    if (task.scriptTask) return task;
     const model = config.model || config.videoModel;
     const pollId = videoPollId(model, task);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);

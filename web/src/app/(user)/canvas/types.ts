@@ -107,6 +107,7 @@ export type CanvasNodeMetadata = {
     panoramaFinalPrompt?: string;
     panoramaProjection?: "equirectangular";
     directorProject?: unknown;
+    interactive?: boolean;
 };
 
 export type CanvasDirectorPanorama = {
@@ -132,7 +133,8 @@ export type CanvasDirectorVideo = {
 
 export type CanvasNodeData = {
     id: string;
-    type: CanvasNodeType;
+    // 内置节点用 CanvasNodeType；插件节点用 "<pluginId>:<name>" 字符串
+    type: CanvasNodeType | (string & {});
     title: string;
     position: Position;
     width: number;
@@ -148,7 +150,7 @@ export type CanvasConnection = {
 
 export type CanvasAssistantReference = {
     id: string;
-    type: CanvasNodeType;
+    type: CanvasNodeType | (string & {});
     title: string;
     label?: string;
     dataUrl?: string;

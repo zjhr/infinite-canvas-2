@@ -23,6 +23,7 @@ import {
     Type,
     Video,
     X,
+    Puzzle,
 } from "lucide-react";
 import { App, AutoComplete, Button, Dropdown, Modal, Segmented, Switch, Tooltip } from "antd";
 import { motion } from "motion/react";
@@ -826,7 +827,7 @@ function AssistantMessages({ messages, nodeById, onFocusNode, onRetry, codexMode
         code: ({ node, className, children, ...props }) => {
             const canvasNode = nodeById.get(String(children).trim());
             if (node?.position?.start.line === node?.position?.end.line && canvasNode) {
-                const { Icon, label: typeLabel } = ASSISTANT_NODE_TYPE_META[canvasNode.type];
+                const { Icon, label: typeLabel } = ASSISTANT_NODE_TYPE_META[canvasNode.type as CanvasNodeType] || { Icon: Puzzle, label: "插件节点" };
                 const hasImage = isCanvasImageNodeType(canvasNode.type) && canvasNode.metadata?.content;
                 return (
                     <span className="my-1 flex w-full min-w-0 items-center rounded-lg transition-opacity hover:opacity-80" style={{ background: theme.toolbar.itemHover }}>

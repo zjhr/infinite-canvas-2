@@ -5,6 +5,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasNodeType, type CanvasNodeData, type ViewportTransform } from "../types";
+import { getNodeDefinition } from "../utils/canvas-node-registry";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 
 export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { nodes: CanvasNodeData[]; viewport: ViewportTransform; viewportSize: { width: number; height: number }; onViewportChange: (viewport: ViewportTransform) => void }) {
@@ -116,7 +117,7 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
             >
                 {nodes.map((node) => {
                     const pos = toMinimap(node.position.x, node.position.y);
-                    const color = isCanvasImageNodeType(node.type) ? "#10b981" : node.type === CanvasNodeType.Video ? "#f97316" : node.type === CanvasNodeType.Audio ? "#a855f7" : node.type === CanvasNodeType.Config ? "#60a5fa" : theme.node.muted;
+                    const color = isCanvasImageNodeType(node.type) ? "#10b981" : node.type === CanvasNodeType.Video ? "#f97316" : node.type === CanvasNodeType.Audio ? "#a855f7" : node.type === CanvasNodeType.Config ? "#60a5fa" : getNodeDefinition(node.type)?.minimapColor || theme.node.muted;
                     return (
                         <div
                             key={node.id}

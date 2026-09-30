@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -32,6 +32,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         startedOnBackground: false,
     });
     const scaleRef = useRef(viewport.k);
+    const viewportRef = useRef(viewport);
     const frameRef = useRef<number | null>(null);
     const nextViewportRef = useRef<ViewportTransform | null>(null);
     const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -39,7 +40,8 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
 
     useEffect(() => {
         scaleRef.current = viewport.k;
-    }, [viewport.k]);
+        viewportRef.current = viewport;
+    }, [viewport]);
 
     useEffect(
         () => () => {
@@ -82,30 +84,99 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         };
     }, []);
 
-    const handleWheel = (event: React.WheelEvent<HTMLDivElement> | WheelEvent) => {
+    // 目标到画布容器之间是否存在可滚动区域（文本节点、插件面板等），有则把滚轮让给内容自身滚动
+    const hasScrollableAncestor = (target: Element) => {
+        let node: Element | null = target;
+        while (node && node !== containerRef.current) {
+            if (node instanceof HTMLElement) {
+                const style = window.getComputedStyle(node);
+                if ((/(auto|scroll|overlay)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) || (/(auto|scroll|overlay)/.test(style.overflowX) && node.scrollWidth > node.clientWidth)) return true;
+            }
+            node = node.parentElement;
+        }
+        return false;
+    };
+
+    // 滚轮/触控板手势按帧合并：高频 wheel 事件只累积增量，rAF 里一次性应用，
+    // 避免每个事件都触发整页重渲染造成抖动
+    const wheelFrameRef = useRef<number | null>(null);
+    const wheelAccumulatorRef = useRef({ dx: 0, dy: 0, zoom: 1, anchorX: 0, anchorY: 0 });
+
+    const flushWheelAccumulator = useCallback(() => {
+        wheelFrameRef.current = null;
+        const container = containerRef.current;
+        if (!container) return;
+        const acc = wheelAccumulatorRef.current;
+        let { x, y, k } = viewportRef.current;
+        if (acc.zoom !== 1) {
+            const newScale = Math.min(Math.max(k * acc.zoom, 0.05), 5);
+            const rect = container.getBoundingClientRect();
+            const mouseX = acc.anchorX - rect.left;
+            const mouseY = acc.anchorY - rect.top;
+            const worldX = (mouseX - x) / k;
+            const worldY = (mouseY - y) / k;
+            x = mouseX - worldX * newScale;
+            y = mouseY - worldY * newScale;
+            k = newScale;
+            acc.zoom = 1;
+        }
+        if (acc.dx || acc.dy) {
+            x -= acc.dx;
+            y -= acc.dy;
+            acc.dx = 0;
+            acc.dy = 0;
+        }
+        const next = { x, y, k };
+        viewportRef.current = next;
+        onViewportChange(next);
+    }, [onViewportChange]);
+
+    const scheduleWheelFlush = useCallback(() => {
+        if (wheelFrameRef.current !== null) return;
+        wheelFrameRef.current = requestAnimationFrame(flushWheelAccumulator);
+    }, [flushWheelAccumulator]);
+
+    const handleWheel = (event: WheelEvent) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (event instanceof WheelEvent) {
-            if (!event.ctrlKey || !containerRef.current?.contains(target)) return;
+        if (!target || !containerRef.current?.contains(target)) return;
+        if (target.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
+
+        // 触控板双指捏合 / Ctrl+滚轮：以指针为中心缩放
+        if (event.ctrlKey || event.metaKey) {
             event.preventDefault();
             event.stopPropagation();
-        } else if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
+            let deltaY = event.deltaY;
+            if (event.deltaMode === 1) deltaY *= 16;
+            const acc = wheelAccumulatorRef.current;
+            // 触控板捏合事件增量小(±2-10)频率高，鼠标滚轮一格 ±100；指数系数兼顾两者
+            acc.zoom *= Math.exp(-Math.max(-80, Math.min(80, deltaY)) * 0.005);
+            acc.anchorX = event.clientX;
+            acc.anchorY = event.clientY;
+            scheduleWheelFlush();
+            return;
+        }
 
-        const delta = -event.deltaY;
-        const factor = Math.pow(1.1, delta / 100);
-        const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
-
-        const mouseX = event.clientX - rect.left;
-        const mouseY = event.clientY - rect.top;
-        const worldX = (mouseX - viewport.x) / viewport.k;
-        const worldY = (mouseY - viewport.y) / viewport.k;
-
-        onViewportChange({
-            x: mouseX - worldX * newScale,
-            y: mouseY - worldY * newScale,
-            k: newScale,
-        });
+        // 鼠标滚轮 / 触控板双指滑动：平移画布；Shift+滚轮横向移动
+        if (hasScrollableAncestor(target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        let dx = event.deltaX;
+        let dy = event.deltaY;
+        if (event.shiftKey && !dx) {
+            dx = dy;
+            dy = 0;
+        }
+        if (event.deltaMode === 1) {
+            dx *= 16;
+            dy *= 16;
+        } else if (event.deltaMode === 2) {
+            dx *= window.innerHeight;
+            dy *= window.innerHeight;
+        }
+        const acc = wheelAccumulatorRef.current;
+        acc.dx += dx;
+        acc.dy += dy;
+        scheduleWheelFlush();
     };
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -200,21 +271,15 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
     }, [onCanvasDeselect, onViewportChange]);
 
     useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
-        const preventWheelScroll = (event: WheelEvent) => {
-            const target = event.target instanceof Element ? event.target : null;
-            if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
-            event.preventDefault();
-        };
-        container.addEventListener("wheel", preventWheelScroll, { passive: false });
         document.addEventListener("wheel", handleWheel, { capture: true, passive: false });
         return () => {
-            container.removeEventListener("wheel", preventWheelScroll);
             document.removeEventListener("wheel", handleWheel, true);
+            if (wheelFrameRef.current !== null) {
+                cancelAnimationFrame(wheelFrameRef.current);
+                wheelFrameRef.current = null;
+            }
         };
-    }, [containerRef, handleWheel]);
+    }, [handleWheel]);
 
     const temporaryTool = isSpacePressed;
     const activeTool = temporaryTool ? (tool === "select" ? "pan" : "select") : tool;
@@ -228,7 +293,6 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             onPointerDown={activeTool === "pan" ? undefined : handlePointerDown}
             onPointerDownCapture={activeTool === "pan" ? handlePointerDown : undefined}
             onDoubleClick={handleDoubleClick}
-            onWheel={handleWheel}
             onContextMenu={onContextMenu}
             onDragOver={(event) => event.preventDefault()}
             onDrop={onDrop}

@@ -7,7 +7,7 @@ import { CanvasNodeType, type CanvasAgentState, type CanvasConnection, type Canv
 
 export type CanvasAgentContextNode = {
     id: string;
-    type: CanvasNodeType;
+    type: CanvasNodeType | string;
     title: string;
     text?: string;
     mediaUrl?: string;
@@ -55,7 +55,7 @@ export type CanvasAgentContext = {
     };
     tasks: Array<{
         nodeId: string;
-        type: CanvasNodeType;
+        type: CanvasNodeType | string;
         status: string;
         taskId: string;
         progress?: number;

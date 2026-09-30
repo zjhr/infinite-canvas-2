@@ -244,9 +244,9 @@ export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()
 }
 
 function readVideoMeta(url: string) {
-    return new Promise<{ width: number; height: number }>((resolve) => {
+    return new Promise<{ width: number; height: number; durationMs?: number }>((resolve) => {
         const video = document.createElement("video");
-        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720 });
+        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720, durationMs: Number.isFinite(video.duration) && video.duration > 0 ? Math.round(video.duration * 1000) : undefined });
         video.onloadedmetadata = done;
         video.onerror = done;
         video.src = url;

@@ -14,11 +14,11 @@ const COMMON_PROMPT = [
     "除非用户另有说明，保持真实摄影质感、电影级光影和自然空间纵深",
 ].join(", ");
 
-export function isPanoramaNodeType(type: CanvasNodeType | null | undefined) {
+export function isPanoramaNodeType(type: CanvasNodeType | string | null | undefined) {
     return type === CanvasNodeType.Panorama;
 }
 
-export function isCanvasImageNodeType(type: CanvasNodeType | null | undefined) {
+export function isCanvasImageNodeType(type: CanvasNodeType | string | null | undefined) {
     return type === CanvasNodeType.Image || type === CanvasNodeType.Panorama;
 }
 

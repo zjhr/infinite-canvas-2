@@ -1,0 +1,18 @@
+{
+    "name": "canvas-plugin-video-concat",
+    "version": "2.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Infinite Canvas 插件:把上游视频按顺序首尾拼接,支持帧级裁剪",
+    "scripts": {
+        "build": "node build.mjs",
+        "dev": "node build.mjs --watch",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@infinite-canvas/plugin-sdk": "file:../sdk",
+        "@types/react": "^19.1.12",
+        "esbuild": "^0.25.0",
+        "typescript": "^5"
+    }
+}

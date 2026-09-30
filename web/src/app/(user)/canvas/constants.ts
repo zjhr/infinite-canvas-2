@@ -1,5 +1,6 @@
 import { CanvasNodeType } from "./types";
 import type { CanvasNodeMetadata } from "./types";
+import { getPluginNodeSpec } from "./utils/canvas-node-registry";
 import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE } from "./utils/canvas-panorama";
 
 type CanvasNodeSpec = {
@@ -55,6 +56,9 @@ export const NODE_SPECS = {
     },
 } satisfies Record<CanvasNodeType, CanvasNodeSpec>;
 
-export function getNodeSpec(type: CanvasNodeType) {
-    return NODE_SPECS[type];
+export function getNodeSpec(type: string) {
+    // 插件节点：取注册表里的默认尺寸/标题/初始 metadata
+    const pluginDefinition = getPluginNodeSpec(type);
+    if (pluginDefinition) return pluginDefinition;
+    return NODE_SPECS[type as CanvasNodeType] || { width: 340, height: 240, title: "插件节点", metadata: {} };
 }

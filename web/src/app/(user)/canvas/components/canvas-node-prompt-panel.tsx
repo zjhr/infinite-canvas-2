@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowUp, LoaderCircle, Maximize2 } from "lucide-react";
-import { Button, Modal, Tooltip } from "antd";
+import { ArrowUp, ChevronDown, LoaderCircle, Maximize2, Replace, Sparkles } from "lucide-react";
+import { Button, Dropdown, Modal, Tooltip } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
 import { useAutoDLWorkflow } from "@/hooks/use-autodl-workflow";
@@ -26,12 +26,15 @@ export type { CanvasVideoFrameOption };
 
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
+// 已生成内容的图片/视频节点重新发送时的落点：生成到新节点，或覆盖当前节点（沿用其原始参考）
+export type CanvasResendMode = "new" | "replace";
+
 type CanvasNodePromptPanelProps = {
     node: CanvasNodeData;
     isRunning: boolean;
     onPromptChange: (nodeId: string, prompt: string) => void;
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => void;
-    onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
+    onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string, resend?: CanvasResendMode) => void;
     mentionReferences?: CanvasResourceReference[];
     connectedNodes?: CanvasNodeData[];
     onDisconnectReference?: (fromNodeId: string, toNodeId: string) => void;
@@ -71,11 +74,12 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     };
 
     const canSubmit = Boolean(prompt.trim()) || (mode !== "text" && Boolean(node.metadata?.workflowRef)) || (mode === "video" && isAutoDLConfig(config) && getAutoDLCapabilities(autodlWorkflow)?.promptRequired === false) || (isPanorama && (hasImageContent || mentionReferences.length > 0));
+    const canReplace = (mode === "image" || mode === "video") && node.type === (mode === "image" ? CanvasNodeType.Image : CanvasNodeType.Video) && Boolean(node.metadata?.content);
 
-    const submit = () => {
+    const submit = (resend?: CanvasResendMode) => {
         const text = prompt.trim();
         if (!canSubmit || isRunning) return;
-        onGenerate(node.id, mode, text);
+        onGenerate(node.id, mode, text, resend === "replace" ? "replace" : undefined);
         if (!isPanorama) setPrompt("");
     };
 
@@ -93,7 +97,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 value={prompt}
                 references={mentionReferences}
                 onChange={updatePrompt}
-                onSubmit={submit}
+                onSubmit={() => submit()}
                 className="thin-scrollbar h-40 w-full resize-none rounded-xl px-3 py-2 text-sm leading-5 outline-none"
                 style={{ background: "transparent", color: theme.node.text }}
                 placeholder={isPanorama ? "描述想生成的全景，或上传/连接图片作为参考" : promptPlaceholder(mode, hasImageContent, hasTextContent)}
@@ -135,21 +139,53 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                         <CanvasCameraControl value={node.metadata?.cameraControl} onChange={(cameraControl) => onConfigChange(node.id, { cameraControl })} buttonClassName="!h-10 !min-w-[92px] !justify-start !rounded-full !px-3" />
                     ) : null}
                 </div>
-                <Button
-                    type="primary"
-                    className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
-                    disabled={isRunning || !canSubmit}
-                    onClick={submit}
-                    aria-label="生成"
-                >
-                    <span className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-                            <CreditSymbol />
-                            {credits.toLocaleString()}
+                {canReplace ? (
+                    <div className="flex shrink-0 items-stretch">
+                        <Button
+                            type="primary"
+                            className="!h-10 !min-w-16 !rounded-l-full !rounded-r-none !px-3"
+                            disabled={isRunning || !canSubmit}
+                            onClick={() => submit("new")}
+                            aria-label="生成"
+                        >
+                            <span className="flex items-center gap-1.5">
+                                <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                    <CreditSymbol />
+                                    {credits.toLocaleString()}
+                                </span>
+                                {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                            </span>
+                        </Button>
+                        <Dropdown
+                            trigger={["click"]}
+                            menu={{
+                                items: [
+                                    { key: "new", icon: <Sparkles className="size-3.5" />, label: resendMenuLabel("新节点", "保留当前结果，在旁边生成新节点") },
+                                    { key: "replace", icon: <Replace className="size-3.5" />, label: resendMenuLabel("替换此节点", "覆盖此节点，沿用其原始参考") },
+                                ],
+                                onClick: ({ key }) => submit(key === "replace" ? "replace" : "new"),
+                            }}
+                        >
+                            <Button type="primary" className="!h-10 !w-7 !rounded-l-none !rounded-r-full !border-l-0 !px-0" disabled={isRunning} icon={<ChevronDown className="size-3.5" />} aria-label="选择发送方式" />
+                        </Dropdown>
+                    </div>
+                ) : (
+                    <Button
+                        type="primary"
+                        className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
+                        disabled={isRunning || !canSubmit}
+                        onClick={() => submit()}
+                        aria-label="生成"
+                    >
+                        <span className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                <CreditSymbol />
+                                {credits.toLocaleString()}
+                            </span>
+                            {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
                         </span>
-                        {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-                    </span>
-                </Button>
+                    </Button>
+                )}
             </div>
             <Modal title="编辑提示词" open={expanded} centered width={760} footer={null} onCancel={() => setExpanded(false)} destroyOnHidden>
                 <div data-canvas-no-zoom className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>
@@ -170,6 +206,16 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
 
 function defaultMode(type: CanvasNodeData["type"]): CanvasNodeGenerationMode {
     return type === CanvasNodeType.Text ? "text" : type === CanvasNodeType.Video ? "video" : type === CanvasNodeType.Audio ? "audio" : "image";
+}
+
+// 两行菜单项：加粗动作标题 + 弱化说明
+function resendMenuLabel(title: string, description: string) {
+    return (
+        <span className="block">
+            <span className="block text-[13px] font-semibold">{title}</span>
+            <span className="block text-[11px] opacity-60">{description}</span>
+        </span>
+    );
 }
 
 function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: CanvasNodeGenerationMode): AiConfig {

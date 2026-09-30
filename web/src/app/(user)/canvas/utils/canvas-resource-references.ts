@@ -2,6 +2,7 @@ import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import { CanvasNodeType, type CanvasAssistantReference, type CanvasConnection, type CanvasNodeData } from "../types";
 import { isCanvasImageNodeType } from "./canvas-panorama";
+import { getNodeDefinition } from "./canvas-node-registry";
 
 export type CanvasResourceKind = "image" | "video" | "audio" | "text";
 
@@ -25,6 +26,9 @@ export function assistantReferenceContentFromNode(node: CanvasNodeData): Partial
     if (!content) return null;
     if (isCanvasImageNodeType(node.type)) return { dataUrl: content, url: undefined, storageKey: node.metadata!.storageKey, mimeType: node.metadata!.mimeType };
     if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) return { dataUrl: undefined, url: content, storageKey: node.metadata!.storageKey, mimeType: node.metadata!.mimeType };
+    // 插件节点按其 resource 声明输出资源
+    const resource = getNodeDefinition(node.type)?.resource?.(node);
+    if (resource) return resource.kind === "text" ? { text: resource.text || "" } : { dataUrl: undefined, url: resource.url, mimeType: node.metadata?.mimeType };
     return null;
 }
 
@@ -111,5 +115,5 @@ function resourceKind(node: CanvasNodeData): CanvasResourceKind | null {
     if (node.type === CanvasNodeType.Video && node.metadata?.content) return "video";
     if (node.type === CanvasNodeType.Audio && node.metadata?.content) return "audio";
     if (node.type === CanvasNodeType.Text && (node.metadata?.content || node.metadata?.prompt)) return "text";
-    return null;
+    return getNodeDefinition(node.type)?.resource?.(node)?.kind || null;
 }

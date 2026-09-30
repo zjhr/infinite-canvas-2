@@ -17,6 +17,7 @@ export type LocalModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelScripts?: Record<string, string>;
     uploadApiKey?: string;
     bridgeId?: string;
     comfyUrl?: string;
@@ -521,13 +522,17 @@ function normalizeVersionedBaseUrl(baseUrl: string) {
 
 export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelChannel[] {
     const channels = Array.isArray(config.localChannels) ? config.localChannels : [];
-    const normalized: LocalModelChannel[] = channels.map((channel, index) => ({
-        id: channel.id || `local-${index + 1}`,
-        protocol: channel.protocol || "openai",
-        name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
-        baseUrl: channel.baseUrl || "",
-        apiKey: channel.apiKey || "",
-        models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+    const normalized: LocalModelChannel[] = channels.map((channel, index) => {
+        const models = Array.isArray(channel.models) ? channel.models.filter(Boolean) : [];
+        return {
+            id: channel.id || `local-${index + 1}`,
+            protocol: channel.protocol || "openai",
+            name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
+            baseUrl: channel.baseUrl || "",
+            apiKey: channel.apiKey || "",
+            models,
+            // 模型被移除后其挂载的脚本一并清理，避免孤儿脚本残留在「脚本」入口上
+            modelScripts: channel.modelScripts && typeof channel.modelScripts === "object" ? Object.fromEntries(Object.entries(channel.modelScripts).filter(([model, value]) => typeof value === "string" && models.includes(model))) : undefined,
         ...(isWorkflowProtocol(channel.protocol || "") ? {
             uploadApiKey: channel.uploadApiKey || "",
             bridgeId: channel.bridgeId || "",
@@ -535,7 +540,8 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
             workflowDir: channel.workflowDir || "",
             workflowSummaries: Array.isArray(channel.workflowSummaries) ? channel.workflowSummaries : [],
         } : {}),
-    }));
+        };
+    });
     if (!normalized.length) {
         normalized.push({ id: "local-default", protocol: "openai", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });
     }
@@ -573,6 +579,12 @@ export function channelProtocolForConfig(config: AiConfig): LocalModelChannel["p
         ? config.publicChannels.find((item) => item.id === channelIdForActiveModel(config)) || config.publicChannels.find((item) => !isWorkflowProtocol(item.protocol || ""))
         : localChannelForActiveModel(config);
     return channel?.protocol || "openai";
+}
+
+/** 模型上挂载的自定义调用脚本；空字符串表示走系统默认调用。 */
+export function resolveModelScript(config: AiConfig, model: string) {
+    const channel = localChannelForActiveModel({ ...config, model });
+    return channel?.modelScripts?.[model]?.trim() || "";
 }
 
 export type { DirectAIProvider } from "@/lib/model-channel";
