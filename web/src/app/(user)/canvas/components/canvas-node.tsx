@@ -455,7 +455,7 @@ function NodeContent(props: NodeContentRendererProps) {
     // 插件节点与 Config/Director 一样由页面注入渲染器；插件内容自带 loading/error 展示
     if (props.renderNodeContent && (props.node.type === CanvasNodeType.Config || props.node.type === CanvasNodeType.Director || isPluginNodeType(props.node.type))) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return props.node.type === CanvasNodeType.Panorama ? <PanoramaNodeContent {...props} /> : <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading" && (props.node.type !== CanvasNodeType.Text || !props.node.metadata.content)) return <LoadingContent node={props.node} theme={props.theme} now={props.now} />;
+    if (props.node.metadata?.status === "loading" && !props.node.metadata.content) return <LoadingContent node={props.node} theme={props.theme} now={props.now} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type as CanvasNodeType];

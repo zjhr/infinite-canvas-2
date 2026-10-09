@@ -673,7 +673,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 const taskId = canvasVideoTaskId(node.metadata);
                 const workflowToken = node.metadata?.workflowRef ? useUserStore.getState().token : "";
                 const generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
-                if (!taskId || (!node.metadata?.workflowRef && !isAiConfigReady(generationConfig, generationConfig.model))) return;
+                if (!taskId || taskId.startsWith("client_video_task_") || (!node.metadata?.workflowRef && !isAiConfigReady(generationConfig, generationConfig.model))) return;
                 pollingVideoNodeIdsRef.current.add(node.id);
                 void (node.metadata?.workflowRef
                     ? getWorkflowTask(workflowToken, taskId).then((task) => workflowVideoTask(task, workflowToken))
@@ -5507,6 +5507,8 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
         if (node.id !== nodeId) return node;
         const progress = typeof task.progress === "number" ? Math.max(0, Math.min(100, task.progress)) : node.metadata?.progress || 0;
         const url = task.video_url || task.url || "";
+        // 已有内容说明真实结果已写入，忽略未携带地址的迟到轮询，避免状态被打回 loading 卡死
+        if (node.metadata?.content && !url) return node;
         const completed = canvasVideoTaskCompleted(task);
         const failed = canvasVideoTaskFailed(task) || (completed && !url);
         const taskStartedAt = parseCanvasVideoTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || startedAt;
