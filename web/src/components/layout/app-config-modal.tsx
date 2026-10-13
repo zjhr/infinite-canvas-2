@@ -19,10 +19,12 @@ import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { geminiTtsVoiceOptions, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
+import { startTokenDanceOAuth } from "@/lib/tokendance-oauth";
 import type { WorkflowChannelData, WorkflowEntry } from "@/lib/workflow-channel";
 import { listWorkflowChannels, readWorkflowChannel, replaceWorkflowChannels, saveWorkflowChannel } from "@/services/workflow-channel-storage";
-import { filterChannelModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
+import { filterChannelModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapabilities, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { useChannelTranslationStore } from "@/stores/use-channel-translation-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -49,6 +51,7 @@ export function AppConfigModal() {
     const [savingConfig, setSavingConfig] = useState(false);
     const [modelSelectChannelId, setModelSelectChannelId] = useState("");
     const [scriptChannelId, setScriptChannelId] = useState("");
+    const [parameterTranslation, setParameterTranslation] = useState<string>();
     const [workflowEntries, setWorkflowEntries] = useState<WorkflowEntry[]>([]);
     const accountConfigRef = useRef<{ ready: boolean; workflowChannels?: WorkflowChannelData[] }>({ ready: false });
     const [remoteStorageSyncEnabled, setRemoteStorageSyncEnabled] = useState(false);
@@ -78,10 +81,21 @@ export function AppConfigModal() {
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : localModelConfig;
     const canUseUserStorageProvider = allowUserStorageProvider;
     const glmTts = isGlmTtsModel(config.audioModel);
-    const grokTts = isGrok2APITtsConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
-    const geminiTts = isGeminiTtsModel(config.audioModel) && isGeminiConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
+    const audioConfig = { ...modelConfig, model: config.audioModel, audioModel: config.audioModel, activeChannelId: modelConfig.audioChannelId || modelConfig.activeChannelId };
+    const grokTts = isGrok2APITtsConfig(audioConfig, config.audioModel);
+    const geminiTts = isGeminiTtsModel(config.audioModel) && isGeminiConfig(audioConfig, config.audioModel);
     const modelSelectChannel = normalizeLocalChannels(config).find((channel) => channel.id === modelSelectChannelId);
     const scriptChannel = scriptChannelId ? normalizeLocalChannels(config).find((channel) => channel.id === scriptChannelId) : null;
+
+    useEffect(() => {
+        setParameterTranslation(undefined);
+        if (!modelSelectChannelId) return;
+        let canceled = false;
+        void useChannelTranslationStore.getState().load(user?.id || "guest")
+            .then((records) => { if (!canceled) setParameterTranslation(records[modelSelectChannelId] || ""); })
+            .catch((error) => { if (!canceled) message.error(error instanceof Error ? error.message : "读取传参配置失败"); });
+        return () => { canceled = true; };
+    }, [modelSelectChannelId, user?.id, message]);
 
     useEffect(() => {
         setWorkflowEntries([]);
@@ -101,6 +115,7 @@ export function AppConfigModal() {
         if (!isConfigOpen || !token || !user?.id) return;
         const accountToken = token;
         const accountId = user.id;
+        const translationRevision = useChannelTranslationStore.getState().revisions[accountId] || 0;
         let canceled = false;
         void fetchUserConfig(accountToken)
             .then(async (payload) => {
@@ -112,8 +127,10 @@ export function AppConfigModal() {
                 setRemoteStorageSyncEnabled(syncS3);
                 setRemoteWebDAVStorageSyncEnabled(syncWebDAV);
                 if (remoteConfig) {
-                    const { workflowChannels, ...modelFields } = remoteConfig;
+                    const { workflowChannels, channelTranslations, ...modelFields } = remoteConfig;
                     delete modelFields.workflowSyncTouched;
+                    await useChannelTranslationStore.getState().replace(accountId, channelTranslations || [], translationRevision);
+                    if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
                     if (workflowChannels !== undefined) {
                         try {
                             await replaceWorkflowChannels(accountId, workflowChannels);
@@ -191,7 +208,9 @@ export function AppConfigModal() {
                     const activeKeys = new Set(workflowChannels.map((channel) => `${channel.protocol}:${channel.id}`));
                     workflowData = stored.filter((channel) => activeKeys.has(`${channel.protocol}:${channel.channelId}`));
                 }
-                await syncUserModelConfig(token, configToSave, workflowData);
+                const translations = user?.id && accountConfigRef.current.ready
+                    ? await useChannelTranslationStore.getState().list(user.id, normalizeLocalChannels(configToSave).map((channel) => channel.id)) : undefined;
+                await syncUserModelConfig(token, configToSave, workflowData, translations);
             }
             const providers = {
                 ...(config.syncStorageConfig || remoteStorageSyncEnabled ? { s3: config.syncStorageConfig ? userStorage : { ...userStorage, enabled: false, endpoint: "", bucket: "", accessKeyId: "", secretAccessKey: "" } } : {}),
@@ -262,10 +281,10 @@ export function AppConfigModal() {
         updateConfig("videoModel", videoModel);
         updateConfig("textModel", textModel);
         updateConfig("audioModel", audioModel);
-        updateConfig("imageChannelId", channelIdForLocalModel(modelChannels, imageModel, config.imageChannelId));
-        updateConfig("videoChannelId", channelIdForLocalModel(modelChannels, videoModel, config.videoChannelId));
-        updateConfig("textChannelId", channelIdForLocalModel(modelChannels, textModel, config.textChannelId));
-        updateConfig("audioChannelId", channelIdForLocalModel(modelChannels, audioModel, config.audioChannelId));
+        updateConfig("imageChannelId", channelIdForLocalModel(modelChannels, imageModel, config.imageChannelId, "image"));
+        updateConfig("videoChannelId", channelIdForLocalModel(modelChannels, videoModel, config.videoChannelId, "video"));
+        updateConfig("textChannelId", channelIdForLocalModel(modelChannels, textModel, config.textChannelId, "text"));
+        updateConfig("audioChannelId", channelIdForLocalModel(modelChannels, audioModel, config.audioChannelId, "audio"));
         updateConfig("baseUrl", modelChannels[0]?.baseUrl || config.baseUrl);
         updateConfig("apiKey", modelChannels[0]?.apiKey || config.apiKey);
     };
@@ -280,18 +299,32 @@ export function AppConfigModal() {
 
     const removeLocalChannel = (id: string) => {
         updateLocalChannels(normalizeLocalChannels(config).filter((channel) => channel.id !== id));
+        void useChannelTranslationStore.getState().save(user?.id || "guest", id, "").catch((error) => message.error(error instanceof Error ? error.message : "删除传参配置失败"));
+    };
+
+    const loginTokenDance = (channelId: string) => {
+        void startTokenDanceOAuth({ target: "local", channelId })
+            .catch((error) => message.error(error instanceof Error ? error.message : "TokenDance 登录失败"));
     };
 
     const openLocalModelSelector = (channel: LocalModelChannel) => setModelSelectChannelId(channel.id);
 
     const closeLocalModelSelector = () => setModelSelectChannelId("");
 
-    const confirmLocalModelSelector = (models: string[]) => {
+    const confirmLocalModelSelector = async (models: string[], modelCapabilities: ModelCapabilities, source: string) => {
         if (!modelSelectChannelId) return;
         const channel = normalizeLocalChannels(config).find((item) => item.id === modelSelectChannelId);
         // 模型列表变化时同步清掉已删除模型的挂载脚本
         const modelScripts = channel?.modelScripts ? Object.fromEntries(Object.entries(channel.modelScripts).filter(([model]) => models.includes(model))) : undefined;
-        patchLocalChannel(modelSelectChannelId, { models, ...(channel?.modelScripts ? { modelScripts } : {}) });
+        const accountId = user?.id || "guest";
+        if (parameterTranslation !== undefined && source !== parameterTranslation) {
+            if (token && !accountConfigRef.current.ready) throw new Error("账号配置尚未加载成功，请重新打开设置后保存传参配置");
+            const latest = (await useChannelTranslationStore.getState().load(accountId))[modelSelectChannelId] || "";
+            if (latest !== parameterTranslation) throw new Error("渠道传参配置已更新，请重新打开模型设置后保存");
+            await useChannelTranslationStore.getState().save(accountId, modelSelectChannelId, source);
+            if ((useUserStore.getState().user?.id || "guest") !== accountId) throw new Error("登录状态已变化");
+        }
+        patchLocalChannel(modelSelectChannelId, { models, modelCapabilities, ...(channel?.modelScripts ? { modelScripts } : {}) });
         closeLocalModelSelector();
     };
 
@@ -330,7 +363,8 @@ export function AppConfigModal() {
         if (useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) {
             throw new Error("登录状态已变化");
         }
-        await syncUserModelConfig(accountToken, current, saved);
+        const translations = await useChannelTranslationStore.getState().list(accountId, normalizeLocalChannels(current).map((channel) => channel.id));
+        await syncUserModelConfig(accountToken, current, saved, translations);
         if (useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) {
             throw new Error("登录状态已变化");
         }
@@ -457,10 +491,17 @@ export function AppConfigModal() {
                                                 <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
                                                 </Button>
-                                                {modelChannelApiKeyUrls[channel.protocol] ? (
+                                                {channel.protocol === "tokendance" || modelChannelApiKeyUrls[channel.protocol] ? (
                                                     <div className="w-full md:absolute md:left-0 md:top-8">
-                                                        <Button block type="primary" size="small" href={modelChannelApiKeyUrls[channel.protocol]} target="_blank">
-                                                            获取 API Key
+                                                        <Button
+                                                            block
+                                                            type="primary"
+                                                            size="small"
+                                                            href={channel.protocol === "tokendance" ? undefined : modelChannelApiKeyUrls[channel.protocol]}
+                                                            target={channel.protocol === "tokendance" ? undefined : "_blank"}
+                                                            onClick={channel.protocol === "tokendance" ? () => void loginTokenDance(channel.id) : undefined}
+                                                        >
+                                                            {channel.protocol === "tokendance" ? "登录" : "获取 API Key"}
                                                         </Button>
                                                     </div>
                                                 ) : null}
@@ -520,7 +561,7 @@ export function AppConfigModal() {
                             </Form.Item>
                         ) : isMimoTtsModel(config.audioModel) ? null : (
                             <Form.Item label="默认音频声音" className="mb-4">
-                                {grokTts ? <GrokTtsVoiceSelect config={modelConfig} model={config.audioModel} value={config.grokTtsVoice} enabled={isConfigOpen} onChange={(value) => updateConfig("grokTtsVoice", value)} /> : <Select value={glmTts ? normalizeGlmTtsVoice(config.glmTtsVoice) : config.audioVoice} options={glmTts ? glmTtsVoiceOptions : audioVoiceOptions} onChange={(value) => updateConfig(glmTts ? "glmTtsVoice" : "audioVoice", value)} />}
+                                {grokTts ? <GrokTtsVoiceSelect config={audioConfig} model={config.audioModel} value={config.grokTtsVoice} enabled={isConfigOpen} onChange={(value) => updateConfig("grokTtsVoice", value)} /> : <Select value={glmTts ? normalizeGlmTtsVoice(config.glmTtsVoice) : config.audioVoice} options={glmTts ? glmTtsVoiceOptions : audioVoiceOptions} onChange={(value) => updateConfig(glmTts ? "glmTtsVoice" : "audioVoice", value)} />}
                             </Form.Item>
                         )}
                         {grokTts ? (
@@ -637,7 +678,9 @@ export function AppConfigModal() {
                 </Modal>
             ) : modelSelectChannel ? (
                 <ChannelModelSelectorModal
+                    key={`${user?.id || "guest"}:${modelSelectChannel.id}`}
                     channel={modelSelectChannel}
+                    parameterTranslation={parameterTranslation}
                     models={modelSelectChannel.models}
                     onCancel={closeLocalModelSelector}
                     onConfirm={confirmLocalModelSelector}
@@ -686,10 +729,9 @@ function configForLocalChannel(config: AiConfig, channel: LocalModelChannel): Ai
     };
 }
 
-function channelIdForLocalModel(channels: LocalModelChannel[], model: string, currentId: string) {
-    if (!channels.length) return "";
-    if (channels.some((channel) => channel.id === currentId && (!model || channel.models.includes(model)))) return currentId;
-    return channels.find((channel) => model && channel.models.includes(model))?.id || channels[0].id;
+function channelIdForLocalModel(channels: LocalModelChannel[], model: string, currentId: string, capability: ModelCapability) {
+    const matching = channels.filter((channel) => !model || filterChannelModelsByCapability([channel], capability).includes(model));
+    return matching.find((channel) => channel.id === currentId)?.id || matching[0]?.id || "";
 }
 
 function normalizeImageCount(value: string) {

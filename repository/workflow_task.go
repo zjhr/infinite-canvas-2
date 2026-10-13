@@ -72,7 +72,7 @@ func CompleteWorkflowTask(taskID, status string, urls []string, failure string, 
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, "id = ?", taskID).Error; err != nil {
 				return err
 			}
-			if task.Status == "completed" || task.Status == "failed" {
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 				return nil
 			}
 			task.Status, task.Error, task.UpdatedAt, task.CompletedAt = status, failure, current, current
@@ -83,16 +83,20 @@ func CompleteWorkflowTask(taskID, status string, urls []string, failure string, 
 					task.ImageURL = urls[0]
 				}
 			}
-			credits, workflowRef, userID, changed = task.Credits, task.WorkflowRef, task.UserID, true
-			if err := tx.Save(&task).Error; err != nil {
-				return err
+			update := tx.Model(&task).Where("status <> ?", "cancelled").Select("*").Updates(&task)
+			if update.Error != nil {
+				return update.Error
 			}
+			if update.RowsAffected == 0 {
+				return nil
+			}
+			credits, workflowRef, userID, changed = task.Credits, task.WorkflowRef, task.UserID, true
 		case strings.HasPrefix(taskID, "wf-video-"):
 			var task model.VideoTask
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, "id = ?", taskID).Error; err != nil {
 				return err
 			}
-			if task.Status == "completed" || task.Status == "failed" {
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 				return nil
 			}
 			task.Status, task.Error, task.UpdatedAt, task.CompletedAt = status, failure, current, current
@@ -102,16 +106,20 @@ func CompleteWorkflowTask(taskID, status string, urls []string, failure string, 
 					task.VideoURL = urls[0]
 				}
 			}
-			credits, workflowRef, userID, changed = task.Credits, task.WorkflowRef, task.UserID, true
-			if err := tx.Save(&task).Error; err != nil {
-				return err
+			update := tx.Model(&task).Where("status <> ?", "cancelled").Select("*").Updates(&task)
+			if update.Error != nil {
+				return update.Error
 			}
+			if update.RowsAffected == 0 {
+				return nil
+			}
+			credits, workflowRef, userID, changed = task.Credits, task.WorkflowRef, task.UserID, true
 		case strings.HasPrefix(taskID, "wf-audio-"):
 			var task model.CanvasAudioTask
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&task, "id = ?", taskID).Error; err != nil {
 				return err
 			}
-			if task.Status == "completed" || task.Status == "failed" {
+			if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 				return nil
 			}
 			task.Status, task.Error, task.UpdatedAt, task.CompletedAt = status, failure, current, current
@@ -121,10 +129,14 @@ func CompleteWorkflowTask(taskID, status string, urls []string, failure string, 
 					task.AudioURL = urls[0]
 				}
 			}
-			credits, workflowRef, userID, changed = task.Credits, task.WorkflowRef, task.UserID, true
-			if err := tx.Save(&task).Error; err != nil {
-				return err
+			update := tx.Model(&task).Where("status <> ?", "cancelled").Select("*").Updates(&task)
+			if update.Error != nil {
+				return update.Error
 			}
+			if update.RowsAffected == 0 {
+				return nil
+			}
+			credits, workflowRef, userID, changed = task.Credits, task.WorkflowRef, task.UserID, true
 		default:
 			return errors.New("工作流任务 ID 无效")
 		}

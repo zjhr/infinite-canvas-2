@@ -2,6 +2,7 @@ export type DirectVideoResponse = { id: string; task_id?: string; video_id?: str
 
 export type DirectProtocolAdapter = Readonly<{
     rawAuthorization?: boolean;
+    headers?: Readonly<Record<string, string>>;
     pollURL?(baseUrl: string, taskId: string): string;
     pollPath(taskId: string): string;
     readTaskId(payload: unknown): string;

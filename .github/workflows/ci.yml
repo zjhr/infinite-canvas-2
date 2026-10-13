@@ -15,6 +15,9 @@ jobs:
           go-version-file: go.mod
       - name: Go test
         run: go test ./...
+      - name: Comfy Bridge Go test
+        working-directory: canvas-agent/native/comfy-bridge
+        run: go test ./...
 
   web-build:
     runs-on: ubuntu-latest

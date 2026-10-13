@@ -21,8 +21,8 @@ func TestModelProtocolProxyPathContract(t *testing.T) {
 		{"gemini speech before mimo", "gemini", "", "mimo-v2.5-tts", "/audio/speech", "/v1beta/models/mimo-v2.5-tts:generateContent"},
 		{"gemini video before cog", " GEMINI ", "https://api.kie.ai", "cogvideox-3", "/videos", "/v1beta/models/cogvideox-3:predictLongRunning"},
 		{"gemini operation", "gemini", "", "veo", "/videos/operations/task", "/v1beta/operations/task"},
-		{"minimax create before kie URL", "metaso", "https://api.kie.ai", "MiniMax-H3", "/videos", "/v2/video_generation"},
-		{"minimax other endpoint stops kie", "metaso", "https://api.kie.ai", "MiniMax-H3", "/images/generations", "/images/generations"},
+		{"minimax create before kie URL", "minimax", "https://api.kie.ai", "MiniMax-H3", "/videos", "/v2/video_generation"},
+		{"minimax other endpoint stops kie", "minimax", "https://api.kie.ai", "MiniMax-H3", "/images/generations", "/images/generations"},
 		{"cog before kie", "kie", "", " COGVIDEOX-3 ", "/videos", "/videos/generations"},
 		{"kie grok image special", "kie", "", " GROK-IMAGINE-IMAGE-2-0/TEXT-TO-IMAGE ", "/images/generations", "/client/tasks"},
 		{"kie URL beats apimart", "apimart", "https://api.kie.ai", "sora-2", "/videos", "/jobs/createTask"},
@@ -39,7 +39,6 @@ func TestModelProtocolProxyPathContract(t *testing.T) {
 		{"openai plan URL unchanged", "openai", "https://api.example/API/PLAN/V3", "deployment-id", "/videos", "/videos"},
 		{"ark create", "ark", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seedance-2.0", "/videos", "/contents/generations/tasks"},
 		{"ark poll", "ark", "https://ark.cn-beijing.volces.com/api/plan/v3", "doubao-seedance-2.0", "/videos/task a?b", "/contents/generations/tasks/task a?b"},
-		{"88api", "88api", "https://88api.ai/v1", "seedance-2.0-mini-720p", "/videos", "/videos"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -49,7 +48,7 @@ func TestModelProtocolProxyPathContract(t *testing.T) {
 			}
 		})
 	}
-	for _, protocol := range []string{"", "openai", "grok2api", "metaso", "mimo", "88api", "future-protocol"} {
+	for _, protocol := range []string{"", "openai", "grok2api", "minimax", "mimo", "future-protocol"} {
 		for _, path := range []string{"/chat/completions", "/responses", "/images/generations", "/images/edits", "/audio/speech", "/videos", "/videos/task", "/models"} {
 			if got := resolveAIProxyPath(model.ModelChannel{Protocol: protocol}, "future-model", path); got != path {
 				t.Errorf("passthrough %q %q: got %q", protocol, path, got)
@@ -65,7 +64,7 @@ func TestModelProtocolProxyURLContract(t *testing.T) {
 		{"default version", "openai", " https://api.example/ ", "model", "/models", "https://api.example/v1/models"},
 		{"existing v1", "openai", "https://api.example/v1/", "model", "/videos", "https://api.example/v1/videos"},
 		{"gemini base version", "gemini", "https://api.example/v1beta/", "model", "/v1beta/models/model:generateContent", "https://api.example/v1beta/models/model:generateContent"},
-		{"metaso no v1", "metaso", "https://api.example/", "MiniMax-H3", "/v2/video_generation", "https://api.example/v2/video_generation"},
+		{"minimax no v1", "minimax", "https://api.example/", "MiniMax-H3", "/v2/video_generation", "https://api.example/v2/video_generation"},
 		{"autodl no v1", "autodl", "https://api.example/", "minimax_h3_b99_002", "/api/v1/comfyui/comfyui_workflow/minimax_h3_b99_002", "https://api.example/api/v1/comfyui/comfyui_workflow/minimax_h3_b99_002"},
 		{"agnes query", "openai", "https://api.example/v1/", "agnes-video-2.5", "/videos/video_a b", "https://api.example/agnesapi?model_name=agnes-video-2.5&video_id=video_a+b"},
 		{"agnes wins protocol URL builder", "gemini", "https://api.example/v1", "agnes-video-2.5", "/videos/video_task", "https://api.example/agnesapi?model_name=agnes-video-2.5&video_id=video_task"},

@@ -9,7 +9,7 @@ func TestWorkflowFieldsKeepOriginalBridgeExecution(t *testing.T) {
 		"3": jsonMap{"class_type": "CLIPTextEncode", "inputs": jsonMap{"text": "old"}},
 	}
 	fields := []any{jsonMap{"nodeId": "1", "fieldName": "image", "source": "referenceImage", "sourceIndex": float64(0), "enabled": true}, jsonMap{"nodeId": "2", "fieldName": "steps", "source": "count", "enabled": true}}
-	payload := jsonMap{"workflowFields": fields, "referenceImages": []any{}, "params": jsonMap{"count": float64(5)}}
+	payload := jsonMap{"workflowFields": fields, "referenceImages": []any{}, "workflowOverrides": []any{jsonMap{"nodeId": "2", "fieldName": "steps", "value": float64(5)}}}
 	if err := validateWorkflowMediaInputs(fields, payload); err != nil {
 		t.Fatal(err)
 	}

@@ -33,6 +33,8 @@ type directAIRequestPlan struct {
 	ContentType string                    `json:"contentType"`
 	Body        any                       `json:"body"`
 	Uploads     map[string]directAIUpload `json:"uploads,omitempty"`
+	Protocol    string                    `json:"protocol,omitempty"`
+	FormData    bool                      `json:"formData,omitempty"`
 }
 
 type directAIUpload struct {
@@ -103,6 +105,9 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 		return directAIRequestPlan{}, err
 	}
 	body, contentType = prepared.body, prepared.contentType
+	if service.IsTokenDanceChannel(channel) {
+		upstreamPath = prepared.path
+	}
 
 	var translated any
 	if err := json.Unmarshal(body, &translated); err != nil {
@@ -121,6 +126,8 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 		ContentType: contentType,
 		Body:        translated,
 		Uploads:     uploads,
+		Protocol:    prepared.protocol,
+		FormData:    prepared.formData,
 	}, nil
 }
 

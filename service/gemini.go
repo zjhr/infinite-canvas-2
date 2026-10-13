@@ -35,6 +35,13 @@ func BuildGeminiChannelURL(channel model.ModelChannel, path string) string {
 
 func SetModelChannelAuthHeader(request *http.Request, channel model.ModelChannel) {
 	modelProtocolForChannel(channel).setAuth(request, channel)
+	if IsTokenDanceChannel(channel) {
+		request.Header.Set("X-App-URL", "https://infinite-canvas")
+		if request.Method == http.MethodPost &&
+			strings.HasSuffix(request.URL.Path, "/alibaba/happyhorse/v1/video-synthesis") {
+			request.Header.Set("X-DashScope-Async", "enable")
+		}
+	}
 }
 
 func StripGeminiModelField(body []byte, contentType string) ([]byte, error) {

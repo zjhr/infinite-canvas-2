@@ -1048,13 +1048,13 @@ export default function ImagePage() {
         const baseConfig = { ...effectiveConfig, ...configOverride };
         const requestModel = configOverride?.imageModel || configOverride?.model || model;
         const requestChannelId = resolveImageChannelId(baseConfig, requestModel, configOverride?.imageChannelId, configOverride?.activeChannelId, baseConfig.imageChannelId, baseConfig.activeChannelId);
+        const requestConfig = { ...baseConfig, model: requestModel, imageModel: requestModel, activeChannelId: requestChannelId, imageChannelId: requestChannelId, count: "1" };
         if (workflowRef && !token) { message.warning("工作流生成请先登录"); return null; }
-        if (!workflowRef && !isAiConfigReady(baseConfig, requestModel)) {
+        if (!workflowRef && !isAiConfigReady(requestConfig, requestModel)) {
             message.warning("请先完成配置");
             openConfigDialog(true);
             return null;
         }
-        const requestConfig = { ...baseConfig, model: requestModel, imageModel: requestModel, activeChannelId: requestChannelId, imageChannelId: requestChannelId, count: "1" };
         return {
             text,
             requestConfig,

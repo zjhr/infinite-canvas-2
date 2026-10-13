@@ -112,6 +112,14 @@ func CreateWorkflowTask(ctx context.Context, user model.AuthUser, input Workflow
 }
 
 func GetWorkflowTask(ctx context.Context, user model.AuthUser, taskID string) (WorkflowTaskResult, error) {
+	switch {
+	case strings.HasPrefix(taskID, "client_image_task_"):
+		taskID = workflowTaskID(user.ID, "image", taskID)
+	case strings.HasPrefix(taskID, "client_video_task_"):
+		taskID = workflowTaskID(user.ID, "video", taskID)
+	case strings.HasPrefix(taskID, "client_audio_task_"):
+		taskID = workflowTaskID(user.ID, "audio", taskID)
+	}
 	snapshot, found, err := workflowTaskSnapshot(user.ID, taskID)
 	if err != nil {
 		return WorkflowTaskResult{}, err
@@ -224,7 +232,7 @@ func workflowPublicStatus(status string) string {
 	if status == "completed" || status == "succeeded" {
 		return "succeeded"
 	}
-	if status == "failed" {
+	if status == "failed" || status == "cancelled" {
 		return "failed"
 	}
 	if status == "running" || status == "processing" {
@@ -290,6 +298,9 @@ func markRunningHubTask(userID, taskID, upstreamID string) error {
 			return errors.New("视频任务不存在")
 		}
 		task.Status, task.Progress, task.UpstreamTaskID, task.UpdatedAt = "running", 10, upstreamID, now()
+		if task.Source == "canvas" || task.Source == "video-workbench" {
+			return repository.UpdateVideoTask(task)
+		}
 		_, err = repository.SaveVideoTask(task)
 		return err
 	case strings.HasPrefix(taskID, "wf-audio-"):
@@ -312,7 +323,7 @@ func workflowUpstreamID(value string) string {
 	return data.UpstreamTaskID
 }
 
-func pollRunningHubWorkflowTask(task repository.RunningHubWorkflowTask) error {
+func pollRunningHubWorkflowTask(ctx context.Context, task repository.RunningHubWorkflowTask) error {
 	if started, parseErr := time.Parse(time.RFC3339Nano, task.CreatedAt); parseErr == nil && time.Since(started) > workflowTaskTimeout {
 		return finishWorkflowTask(task.ID, "failed", nil, "RunningHub 任务超过 1 小时仍未完成")
 	}
@@ -332,7 +343,7 @@ func pollRunningHubWorkflowTask(task repository.RunningHubWorkflowTask) error {
 		return finishWorkflowTask(task.ID, "failed", nil, err.Error())
 	}
 	var capture AICallLogInput
-	urls, done, pollErr := PollRunningHubTask(context.Background(), resolved.Channel, upstreamID, &capture)
+	urls, done, pollErr := PollRunningHubTask(ctx, resolved.Channel, upstreamID, &capture)
 	if errors.Is(pollErr, errRunningHubTaskTerminal) {
 		failure := strings.TrimSpace(strings.TrimPrefix(pollErr.Error(), errRunningHubTaskTerminal.Error()+":"))
 		if failure == "" {

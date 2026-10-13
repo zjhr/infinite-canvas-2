@@ -2,7 +2,7 @@ import { isGlmTtsModel } from "@/lib/audio-generation";
 import { isGrok2APITtsConfig } from "@/lib/grok-tts";
 import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { channelProtocolForConfig, type AiConfig } from "@/stores/use-config-store";
+import { type AiConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasAgentState, type CanvasConnection, type CanvasNodeData } from "../types";
 
 export type CanvasAgentContextNode = {
@@ -101,7 +101,8 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
     const includedIds = new Set(orderedNodes.map((node) => node.id));
     const videoModel = input.config.videoModel || input.config.model;
     const audioModel = input.config.audioModel;
-    const grokTts = isGrok2APITtsConfig({ ...input.config, model: audioModel }, audioModel);
+    const audioConfig = { ...input.config, model: audioModel, activeChannelId: input.config.audioChannelId || input.config.activeChannelId };
+    const grokTts = isGrok2APITtsConfig(audioConfig, audioModel);
 
     return {
         project: {
@@ -127,8 +128,8 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
             imageCount: input.config.canvasImageCount || input.config.count,
             videoSeconds: input.config.videoSeconds,
             videoGenerateAudio: input.config.videoGenerateAudio,
-            videoSupportsAudio: supportsVideoAudioGeneration(videoModel, channelProtocolForConfig({ ...input.config, model: videoModel, videoModel })),
-            audioVoice: isGeminiTtsModel(audioModel) && isGeminiConfig({ ...input.config, model: audioModel }, audioModel) ? input.config.geminiTtsVoice : isGlmTtsModel(audioModel) ? input.config.glmTtsVoice : grokTts ? input.config.grokTtsVoice : input.config.audioVoice,
+            videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
+            audioVoice: isGeminiTtsModel(audioModel) && isGeminiConfig(audioConfig, audioModel) ? input.config.geminiTtsVoice : isGlmTtsModel(audioModel) ? input.config.glmTtsVoice : grokTts ? input.config.grokTtsVoice : input.config.audioVoice,
             audioLanguage: grokTts ? input.config.grokTtsLanguage : "",
             audioFormat: isGlmTtsModel(audioModel) ? input.config.glmTtsFormat : grokTts ? input.config.grokTtsFormat : input.config.audioFormat,
             audioSpeed: isGlmTtsModel(audioModel) ? input.config.glmTtsSpeed : grokTts ? input.config.grokTtsSpeed : input.config.audioSpeed,

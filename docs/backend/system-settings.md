@@ -108,16 +108,19 @@ description: settings 表中 public 和 private 配置结构说明
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、MiniMax、APIMart、KIE、MiMo、88API |
+| `protocol` | string | 协议，支持 OpenAI、Gemini、Grok2API、MiniMax、APIMart、KIE、MiMo |
 | `name` | string | 渠道名称 |
 | `baseUrl` | string | 渠道接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
+| `parameterTranslation` | string | 渠道自定传参转译原文，按 `models` 中的真实模型名称配置；空值沿用默认调用 |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |
 | `enabled` | boolean | 是否启用 |
 | `remark` | string | 备注 |
 
 后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。
+
+公开渠道信息增加 `parameterTranslationModels: string[]`，只列出已配置生成请求且允许使用的模型名，供前端选择调用入口；不公开转译原文和密钥。个人渠道原文随用户 `modelConfig.channelTranslations` 保存，每项为 `{ channelId, parameterTranslation }`，与外部 `localChannels` 的 URL、密钥和模型配置分开。
 
 `promptSync` 字段：
 

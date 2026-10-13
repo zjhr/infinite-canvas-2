@@ -10,6 +10,7 @@ import { replaceWorkflowChannels } from "@/services/workflow-channel-storage";
 import { STORAGE_SYNC_FAILED_EVENT, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider } from "@/services/image-storage";
 import { defaultConfig, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { useChannelTranslationStore } from "@/stores/use-channel-translation-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -24,6 +25,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const isLoginPage = pathname === "/login" || pathname === "/admin/login";
+    const isTokenDanceCallback = pathname === "/tokendance/callback";
     const adminRemoteTokenRef = useRef("");
     const accountSessionRef = useRef({ token, userId: user?.id || "" });
 
@@ -45,10 +47,15 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [hydrateUser, isLoginPage]);
 
 	useEffect(() => {
-		if (!token || user?.role !== "admin" || adminRemoteTokenRef.current === token) return;
+		if (!token || adminRemoteTokenRef.current === token) return;
+		if (isTokenDanceCallback) {
+			adminRemoteTokenRef.current = token;
+			return;
+		}
+		if (user?.role !== "admin") return;
 		adminRemoteTokenRef.current = token;
 		if (channelMode !== "remote") updateConfig("channelMode", "remote");
-	}, [channelMode, token, updateConfig, user?.role]);
+	}, [channelMode, isTokenDanceCallback, token, updateConfig, user?.role]);
 
 	useLayoutEffect(() => {
 		const previous = accountSessionRef.current;
@@ -62,9 +69,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 	}, [token, updateConfig, user?.id]);
 
 	useEffect(() => {
-        if (!token || !user?.id) return;
+        if (isTokenDanceCallback || !token || !user?.id) return;
         const accountToken = token;
         const accountId = user.id;
+        const translationRevision = useChannelTranslationStore.getState().revisions[accountId] || 0;
         let canceled = false;
 		void fetchUserConfig(accountToken)
 			.then(async (payload) => {
@@ -73,7 +81,9 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 				const syncS3 = payload.modelConfig?.syncStorageConfig === true;
                 const syncWebDAV = payload.modelConfig?.syncWebDAVStorageConfig === true;
                 if (payload.modelConfig) {
-                    const { workflowChannels, ...modelConfig } = payload.modelConfig;
+                    const { workflowChannels, channelTranslations, ...modelConfig } = payload.modelConfig;
+					await useChannelTranslationStore.getState().replace(accountId, channelTranslations || [], translationRevision);
+					if (canceled || useUserStore.getState().token !== accountToken || useUserStore.getState().user?.id !== accountId) return;
 					if (workflowChannels !== undefined) {
 						try {
 							await replaceWorkflowChannels(accountId, workflowChannels);
@@ -107,7 +117,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         return () => {
             canceled = true;
         };
-    }, [token, updateConfig, user?.id]);
+    }, [isTokenDanceCallback, token, updateConfig, user?.id]);
 
     useEffect(() => {
         if (handledConfigParams.current) return;

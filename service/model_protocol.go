@@ -13,9 +13,9 @@ const (
 	ModelChannelProtocolGrok2API = "grok2api"
 	ModelChannelProtocolAPIMart  = "apimart"
 	ModelChannelProtocolKIE      = "kie"
-	ModelChannelProtocol88API    = "88api"
 	ModelChannelProtocolAutoDL   = "autodl"
 	ModelChannelProtocolArk      = "ark"
+	ModelChannelProtocolTokenDance = "tokendance"
 )
 
 type modelProtocolAdapter struct {
@@ -31,7 +31,7 @@ type modelProtocolRule struct {
 }
 
 var modelProtocolRegistry map[string]modelProtocolAdapter
-var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocol88API, ModelChannelProtocolAutoDL, ModelChannelProtocolArk}
+var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocolAutoDL, ModelChannelProtocolArk, ModelChannelProtocolTokenDance}
 
 func init() {
 	compatible := modelProtocolAdapter{
@@ -42,7 +42,7 @@ func init() {
 		models:    fetchOpenAIAdminChannelModels,
 		testModel: testOpenAIChannelModel,
 	}
-	modelProtocolRegistry = make(map[string]modelProtocolAdapter, 10)
+	modelProtocolRegistry = make(map[string]modelProtocolAdapter, 11)
 	for _, id := range modelProtocolIDs {
 		modelProtocolRegistry[id] = compatible
 	}
@@ -104,14 +104,12 @@ func init() {
 	}
 	modelProtocolRegistry[ModelChannelProtocolAutoDL] = autodl
 
-	api88 := compatible
-	api88.testModel = func(model.ModelChannel, string) (string, error) {
-		return "88API 渠道不会调用聊天接口测试，请在对应创作台验证模型。", nil
-	}
-	modelProtocolRegistry[ModelChannelProtocol88API] = api88
 	ark := compatible
 	ark.testModel = testArkSeedanceChannelModel
 	modelProtocolRegistry[ModelChannelProtocolArk] = ark
+	tokenDance := compatible
+	tokenDance.buildURL = BuildTokenDanceChannelURL
+	modelProtocolRegistry[ModelChannelProtocolTokenDance] = tokenDance
 	glm := compatible
 	glm.testModel = testGLMTTSChannelModel
 	modelProtocolRegistry["model:glm-tts"] = glm
@@ -130,9 +128,6 @@ var modelDiscoveryRules = []modelProtocolRule{
 var modelConfigTestRules = []modelProtocolRule{
 	{ModelChannelProtocolAutoDL, func(channel model.ModelChannel, _ string) bool { return IsAutoDLChannel(channel) }},
 	{ModelChannelProtocolMiniMax, func(channel model.ModelChannel, _ string) bool { return IsMiniMaxChannel(channel) }},
-	{ModelChannelProtocol88API, func(channel model.ModelChannel, _ string) bool {
-		return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocol88API)
-	}},
 	{ModelChannelProtocolArk, func(channel model.ModelChannel, _ string) bool { return IsArkChannel(channel) }},
 }
 
@@ -160,6 +155,10 @@ func modelProtocolForChannel(channel model.ModelChannel) modelProtocolAdapter {
 
 func IsArkChannel(channel model.ModelChannel) bool {
 	return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocolArk)
+}
+
+func IsTokenDanceChannel(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocolTokenDance)
 }
 
 func matchModelProtocol(rules []modelProtocolRule, channel model.ModelChannel, modelName string) (modelProtocolAdapter, bool) {

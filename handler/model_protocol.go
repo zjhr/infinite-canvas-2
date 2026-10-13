@@ -27,6 +27,8 @@ type aiProtocolRequest struct {
 	endpoint     string
 	path         string
 	failureLabel string
+	protocol     string
+	formData     bool
 }
 
 type aiProtocolAdapter struct {
@@ -46,6 +48,34 @@ type aiProtocolAdapter struct {
 // HTTP 混合钩子留在原 handler 包边界，避免 service 反向依赖 handler。
 // 表只初始化一次；每阶段只执行自身钩子，bool 表示停止匹配，不表示字段是否改变。
 var builtinAIProtocols = []aiProtocolAdapter{
+	{
+		id: service.ModelChannelProtocolTokenDance,
+		path: func(channel model.ModelChannel, _ string, path string) (string, bool) {
+			if !service.IsTokenDanceChannel(channel) {
+				return path, false
+			}
+			if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+				protocol, taskID, ok := parseTokenDanceTaskID(strings.TrimPrefix(path, "/videos/"))
+				if ok {
+					return tokenDancePollPath(protocol, taskID), true
+				}
+			}
+			return path, true
+		},
+		prepare: prepareTokenDanceRequest,
+		videoResponse: func(payload []byte, request *http.Request, channel model.ModelChannel, modelName string, status bool) ([]byte, bool) {
+			return transformTokenDanceVideoResponse(payload, request, channel, modelName, status)
+		},
+		videoError: func(payload []byte, channel model.ModelChannel, _ string, _ bool) string {
+			if !service.IsTokenDanceChannel(channel) {
+				return ""
+			}
+			return tokenDancePayloadError(payload)
+		},
+		uploads: func(model.ModelChannel, map[string]bool) (map[string]directAIUpload, error) {
+			return nil, nil
+		},
+	},
 	{
 		id: service.ModelChannelProtocolAutoDL,
 		path: func(channel model.ModelChannel, modelName string, path string) (string, bool) {
@@ -359,7 +389,6 @@ var builtinAIProtocols = []aiProtocolAdapter{
 			return baseURL + "/agnesapi?" + values.Encode(), true
 		},
 	},
-	{id: service.ModelChannelProtocol88API},
 	{
 		id:   service.ModelChannelProtocolOpenAI,
 		path: func(_ model.ModelChannel, _ string, path string) (string, bool) { return path, true },

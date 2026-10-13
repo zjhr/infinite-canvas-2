@@ -1,4 +1,5 @@
 import type { ModelChannelProtocol } from "@/lib/model-channel";
+import type { ModelCapabilities } from "@/stores/use-config-store";
 import type { WorkflowEntry, WorkflowSummary } from "@/lib/workflow-channel";
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
@@ -187,6 +188,8 @@ export type AdminModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelCapabilities?: ModelCapabilities;
+    parameterTranslation?: string;
     weight: number;
     timeout: number;
     enabled: boolean;
@@ -225,11 +228,13 @@ export type AdminModelCost = {
 };
 
 export type AdminPublicModelChannelInfo = {
+	parameterTranslationModels?: string[];
     id: string;
     protocol: AdminModelChannel["protocol"];
     name: string;
     baseUrl: string;
     models: string[];
+    modelCapabilities?: ModelCapabilities;
     weight: number;
     timeout: number;
     enabled: boolean;
@@ -317,6 +322,7 @@ export type AdminAICallLog = {
     channelId: string;
     channelName: string;
     status: number;
+    failed: boolean;
     durationMs: number;
     credits: number;
     requestBody: string;

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -53,6 +54,11 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
 	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
 	keepPrivateStorageSecrets(&settings, normalizeSettings(saved))
+	for _, channel := range settings.Private.Channels {
+		if _, err := ParameterTranslationModels(channel.ParameterTranslation); err != nil {
+			return model.Settings{}, fmt.Errorf("渠道 %s：%w", channel.Name, err)
+		}
+	}
 	if err := validateEnabledStorageProviderTypes(settings.Private.Storage.Providers); err != nil {
 		return model.Settings{}, err
 	}
@@ -77,6 +83,24 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 	resolved, err := resolveAdminChannel(index, channel)
 	if err != nil {
 		return "", err
+	}
+	translation, err := NewParameterTranslation(resolved, modelName, map[string]any{"prompt": "test", "count": 1})
+	if err != nil {
+		return "", err
+	}
+	if translation != nil {
+		kind := resolved.ModelCapabilities[modelName]
+		if kind == "" {
+			kind = "image"
+		}
+		result, err := translation.Send(context.Background(), kind, false, "")
+		if err != nil {
+			return "", err
+		}
+		if len(result.TaskIDs) > 0 {
+			return "自定义请求已提交，接口返回任务 ID", nil
+		}
+		return "自定义请求调用成功", nil
 	}
 	if adapter, ok := matchModelProtocol(modelConfigTestRules, resolved, modelName); ok {
 		return adapter.testModel(resolved, modelName)
@@ -462,7 +486,7 @@ func isVideoModelName(modelName string) bool {
 	if kind := AutoDLModelKind(modelName); kind != "unsupported" {
 		return kind == "video"
 	}
-	return name == "minimax-h3" || strings.Contains(name, "seedance") || strings.Contains(name, "video") || strings.Contains(name, "sd2.0 720p") || strings.Contains(name, "sd2.5 720p")
+	return name == "minimax-h3" || strings.Contains(name, "seedance") || strings.Contains(name, "video") || (strings.Contains(name, "sd") && !strings.Contains(name, "sdxl"))
 }
 
 func isImageModelName(modelName string) bool {
@@ -1141,16 +1165,27 @@ func publicChannelInfos(channels []model.ModelChannel, availableModels, availabl
 				continue
 			}
 		}
+		modelCapabilities := map[string]string{}
+		for _, name := range models {
+			if capability, ok := channel.ModelCapabilities[name]; ok {
+				modelCapabilities[name] = capability
+			}
+		}
+		translated, _ := ParameterTranslationModels(channel.ParameterTranslation)
+		translated = filterEnabledModels(translated, models)
 		result = append(result, model.PublicModelChannelInfo{
-			ID:       channel.ID,
-			Protocol: channel.Protocol,
-			Name:     channel.Name,
-			BaseURL:  channel.BaseURL,
-			Models:   models,
-			Weight:   channel.Weight,
-			Timeout:  channel.Timeout,
-			Enabled:  channel.Enabled,
-			Remark:   channel.Remark,
+			ParameterTranslationModels: translated,
+			ID:                         channel.ID,
+			Protocol:                   channel.Protocol,
+			Name:                       channel.Name,
+			BaseURL:                    channel.BaseURL,
+			Models:                     models,
+			Weight:                     channel.Weight,
+			Timeout:                    channel.Timeout,
+			Enabled:                    channel.Enabled,
+			Remark:                     channel.Remark,
+
+			ModelCapabilities: modelCapabilities,
 		})
 	}
 	return result

@@ -28,18 +28,10 @@ export async function syncCanvasProjects(
     );
 }
 
-export async function deleteCanvasTasks(sourceId: string, nodeIds: string[] = []) {
+export async function stopCanvasTask(kind: "image" | "video" | "audio", id: string, workflow: boolean, source: "canvas" | "video-workbench" = "canvas") {
     const token = useUserStore.getState().token;
-    const source = sourceId.trim();
-    if (!token || !source) return;
-    return apiPost<{ deleted: boolean }>(
-        "/api/v1/canvas/tasks/delete",
-        {
-            source_id: source,
-            node_ids: Array.from(new Set(nodeIds.map((id) => id.trim()).filter(Boolean))),
-        },
-        token,
-    );
+    if (!token) throw new Error("请先登录后再停止云端任务");
+    return apiPost<{ stopped: boolean }>("/api/v1/canvas/tasks/stop", { kind, id, workflow, source }, token);
 }
 
 export async function deleteCanvasProjects(ids: string[]) {

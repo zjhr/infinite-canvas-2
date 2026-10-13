@@ -3,6 +3,7 @@ import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, gemini
 import { aiApiUrl, aiHeaders, ImageRequestError, isEventStreamResponse, readJsonServerSentEvents, refreshRemoteUser } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
 import { channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { tokenDanceRecoveryMessage } from "./protocols/tokendance";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall, CanvasAgentToolMode } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 import { calibrateCanvasAgentTokenEstimate } from "@/app/(user)/canvas/agent/canvas-agent-memory";
@@ -239,7 +240,12 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
     const choice = payload.choices?.[0] || payload.data?.choices?.[0];
     const message = choice?.message;
     if (!response.ok || (typeof payload.code === "number" && payload.code !== 0) || (typeof payload.code === "string" && payload.code !== "0" && !message)) {
-        throw new CanvasAgentRequestError(readError(payload, response.status, rawText), response.status, readErrorCode(payload));
+        throw new CanvasAgentRequestError(
+            tokenDanceRecoveryMessage(channelProtocolForConfig(config) === "tokendance" ? response.headers.get("TokenDance-Recovery-Action") : null)
+                || readError(payload, response.status, rawText),
+            response.status,
+            readErrorCode(payload),
+        );
     }
     if (!message) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
     if (choice?.finish_reason && /^(?:length|content_filter|max_tokens)$/i.test(choice.finish_reason)) {
@@ -314,7 +320,12 @@ async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPro
     }
     const result = payload.output ? payload : payload.data;
     if (!response.ok || (typeof payload.code === "number" && payload.code !== 0) || (typeof payload.code === "string" && payload.code !== "0" && !result)) {
-        throw new CanvasAgentRequestError(readError(payload, response.status, rawText), response.status, readErrorCode(payload));
+        throw new CanvasAgentRequestError(
+            tokenDanceRecoveryMessage(channelProtocolForConfig(config) === "tokendance" ? response.headers.get("TokenDance-Recovery-Action") : null)
+                || readError(payload, response.status, rawText),
+            response.status,
+            readErrorCode(payload),
+        );
     }
     if (!result) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
     const responseStatus = result.status?.toLowerCase();

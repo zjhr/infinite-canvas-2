@@ -2,9 +2,9 @@ export const modelChannelProtocols = [
     { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com" },
     { value: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com" },
     { value: "grok2api", label: "Grok2API", baseUrl: "" },
-    { value: "metaso", label: "MiniMax & METASO", baseUrl: "https://metaso.cn/api/minimax", apiKeyUrl: "https://metaso.cn/minimax-h3/?s=tt" },
+    { value: "minimax", label: "MiniMax & METASO", baseUrl: "https://metaso.cn/api/minimax", apiKeyUrl: "https://metaso.cn/minimax-h3/?s=tt" },
     { value: "apimart", label: "APIMart", baseUrl: "https://api.apimart.ai/v1", apiKeyUrl: "https://apimart.ai/register?aff=fWMrEv", directRequestPlan: true },
-    { value: "88api", label: "88API", baseUrl: "https://88api.ai/v1", apiKeyUrl: "https://88api.ai/sign-up?aff=25ty" },
+    { value: "tokendance", label: "TokenDance", baseUrl: "https://tokendance.space/gateway/v1", directRequestPlan: true },
     { value: "runninghub", label: "RunningHub", baseUrl: "https://www.runninghub.cn" },
     { value: "comfyui", label: "ComfyUI", baseUrl: "" },
     { value: "autodl", label: "AutoDL", baseUrl: "https://autodl.art", directRequestPlan: true },
@@ -18,6 +18,12 @@ export type DirectAIProvider = Extract<(typeof modelChannelProtocols)[number], {
 export const modelChannelProtocolOptions = modelChannelProtocols.map(({ value, label }) => ({ label, value }));
 export const modelChannelDefaultBaseUrls = Object.fromEntries(modelChannelProtocols.map(({ value, baseUrl }) => [value, baseUrl])) as Record<ModelChannelProtocol, string>;
 export const modelChannelApiKeyUrls = Object.fromEntries(modelChannelProtocols.flatMap((protocol) => "apiKeyUrl" in protocol ? [[protocol.value, protocol.apiKeyUrl]] : [])) as Partial<Record<ModelChannelProtocol, string>>;
+
+export const tokenDanceAppUrl = "https://infinite-canvas";
+
+export function modelChannelAttributionHeaders(protocol: string) {
+    return protocol === "tokendance" ? { "X-App-URL": tokenDanceAppUrl } : {};
+}
 
 const directRequestProviders: ReadonlySet<string> = new Set(modelChannelProtocols.flatMap((protocol) => "directRequestPlan" in protocol && protocol.directRequestPlan === true ? [protocol.value] : []));
 

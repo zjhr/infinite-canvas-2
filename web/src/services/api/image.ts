@@ -1,14 +1,17 @@
 import axios from "axios";
+import { executeParameterTranslation, findParameterTranslation, normalizeTranslationAspectRatio, translationBody, translationHeaders, type TranslationInput } from "./channel-parameter-translation";
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
+import { modelChannelAttributionHeaders } from "@/lib/model-channel";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { autoSyncImage, imageToDataUrl, resolveImageUrl, type UploadedImage } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { fetchAutoDLWorkflows } from "./autodl";
+import { tokenDanceRecoveryMessage } from "./protocols/tokendance";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
 
@@ -71,7 +74,7 @@ export type CanvasImageTask = {
     error?: { message?: string };
     error_detail?: string;
 };
-export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string };
+export type CanvasImageTaskOptions = { nodeId?: string; source?: "canvas" | "image-workbench" | "workflow"; sourceId?: string; clientTaskId?: string; signal?: AbortSignal; onServerTask?: () => void };
 
 type ParsedImageResponse = {
     images: GeneratedImage[];
@@ -94,6 +97,7 @@ type ImageRequestParams = {
     size?: string;
     timeoutSeconds: number;
     streamPartialImages: number;
+    signal?: AbortSignal;
 };
 
 const QUALITY_BASE: Record<string, number> = {
@@ -363,12 +367,13 @@ function timeoutError(timeoutSeconds: number) {
     return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试。`;
 }
 
-async function withTimeout<T>(timeoutSeconds: number, run: (signal: AbortSignal) => Promise<T>) {
+async function withTimeout<T>(timeoutSeconds: number, externalSignal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<T>) {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutSeconds * 1000);
     try {
-        return await run(controller.signal);
+        return await run(externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal);
     } catch (error) {
+        externalSignal?.throwIfAborted();
         if (controller.signal.aborted) throw new Error(timeoutError(timeoutSeconds));
         throw error;
     } finally {
@@ -392,6 +397,7 @@ async function requestWithTransientRetry(run: () => Promise<Response>, retries =
             if (!isTransientStatus(response.status) || attempt === retries) return response;
             lastError = new Error(`上游接口临时不可用：${response.status}`);
         } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") throw error;
             lastError = error;
             if (attempt === retries) throw error;
         }
@@ -549,6 +555,7 @@ export function aiHeaders(config: AiConfig, contentType?: string) {
     if (isGeminiConfig(config)) return geminiDirectHeaders(config);
     return {
         Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}`,
+        ...modelChannelAttributionHeaders(channelProtocolForConfig(config)),
         ...(contentType ? { "Content-Type": contentType } : {}),
     };
 }
@@ -659,7 +666,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
             params.timeoutSeconds,
             () =>
                 requestWithTransientRetry(() =>
-                    withTimeout(params.timeoutSeconds, (signal) =>
+                    withTimeout(params.timeoutSeconds, params.signal, (signal) =>
                         fetch(aiApiUrl(config, "/images/generations"), {
                             method: "POST",
                             headers: aiHeaders(config, "application/json"),
@@ -690,7 +697,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
         const { requestDirectImages } = await import("@/services/api/direct-ai");
-        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/generations", body, params.timeoutSeconds), mime);
+        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/generations", body, params.timeoutSeconds, params.signal), mime);
     }
 
     return requestAndParseImages(
@@ -700,7 +707,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
         params.timeoutSeconds,
         () =>
             requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
+                withTimeout(params.timeoutSeconds, params.signal, (signal) =>
                     fetch(aiApiUrl(config, "/images/generations"), {
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
@@ -746,7 +753,7 @@ async function requestGrokImageEditSingle(config: AiConfig, prompt: string, refe
         params.timeoutSeconds,
         () =>
             requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
+                withTimeout(params.timeoutSeconds, params.signal, (signal) =>
                     fetch(aiApiUrl(config, "/images/edits"), {
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
@@ -788,7 +795,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
         const { requestDirectImages } = await import("@/services/api/direct-ai");
-        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/edits", formData, params.timeoutSeconds), mime);
+        return parseImagePayload(await requestDirectImages(config, directProvider, "/images/edits", formData, params.timeoutSeconds, params.signal), mime);
     }
 
     return requestAndParseImages(
@@ -798,7 +805,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
         params.timeoutSeconds,
         () =>
             requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
+                withTimeout(params.timeoutSeconds, params.signal, (signal) =>
                     fetch(aiApiUrl(config, "/images/edits"), {
                         method: "POST",
                         headers: aiHeaders(config),
@@ -884,7 +891,7 @@ async function requestResponsesSingle(config: AiConfig, prompt: string, inputIma
         params.timeoutSeconds,
         () =>
             requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
+                withTimeout(params.timeoutSeconds, params.signal, (signal) =>
                     fetch(aiApiUrl(config, "/responses"), {
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),
@@ -911,7 +918,7 @@ async function requestChatImagesSingle(config: AiConfig, prompt: string, inputIm
         "/chat/completions",
         body,
         params.timeoutSeconds,
-        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(aiApiUrl(config, "/chat/completions"), {
+        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, params.signal, (signal) => fetch(aiApiUrl(config, "/chat/completions"), {
             method: "POST",
             headers: aiHeaders(config, "application/json"),
             body: JSON.stringify(body),
@@ -947,13 +954,19 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
     }
 }
 
-async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], signal?: AbortSignal): Promise<GeneratedImage[]> {
+	const translation = await findParameterTranslation(config);
+	if (translation) {
+		const input = await imageTranslationInput(config,prompt,references,createImageRequestParams(config));
+		const result = await executeParameterTranslation(config,translation,input,signal);
+		return result.urls.map((dataUrl) => ({id:nanoid(),dataUrl}));
+	}
     assertImageReferencesSupported(config.model, references);
-    const params = createImageRequestParams(config);
+    const params = { ...createImageRequestParams(config), signal };
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
     const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
-        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
+        const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references, signal)));
         const images = results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
         if (images.length) return images;
         const firstError = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -965,6 +978,21 @@ async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?
     if (config.apiMode === "chat" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestChatImagesSingle(config, prompt, inputImageDataUrls, params);
     if (config.apiMode === "responses" && !isGeminiConfig(config) && !isZhipuImageModel(config.model)) return requestResponsesSingle(config, prompt, inputImageDataUrls, params);
     return references.length ? requestImageEditSingle(config, prompt, references, params) : requestImageGenerationSingle(config, prompt, params);
+}
+
+async function imageTranslationInput(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<TranslationInput> {
+    return {
+        kind: "image",
+        variables: {
+            model: config.model,
+            prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+            size: params.size,
+            aspectRatio: normalizeTranslationAspectRatio(config.size),
+            quality: config.quality,
+            count: params.n,
+            images: await Promise.all(references.map(async (ref) => publicHttpUrl(ref.url) || publicHttpUrl(ref.dataUrl) || imageToDataUrl(ref))),
+        },
+    };
 }
 
 async function syncGeneratedImages(images: GeneratedImage[]) {
@@ -1007,8 +1035,10 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 }
 
 export async function createCanvasImageTask(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: CanvasImageTaskOptions = {}): Promise<CanvasImageTask> {
+	const translation = await findParameterTranslation(config);
     if (!usesAccountProxy(config)) {
-        const images = await requestImages({ ...config, count: "1" }, prompt, references);
+        const images = await requestImages({ ...config, count: "1" }, prompt, references, options.signal);
+        options.signal?.throwIfAborted();
         const [image] = images;
         if (!image) throw new Error("接口没有返回图片");
         return syncCanvasImageTask({
@@ -1021,11 +1051,13 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
             status: "completed",
             progress: 100,
             image_url: image.dataUrl,
-            ...(isKIESeedreamLayerDecompositionModel(config.model) ? { image_urls: images.map((item) => item.dataUrl) } : {}),
+            ...(translation || isKIESeedreamLayerDecompositionModel(config.model) ? { image_urls: images.map((item) => item.dataUrl) } : {}),
         }, image.id);
     }
     const params = createImageRequestParams({ ...config, count: "1" });
-    const request = await createCanvasImageTaskRequest({ ...config, count: "1" }, prompt, references, params, options);
+    const request: RequestInit = translation ? {method:"POST",headers:translationHeaders(config,translation),body:JSON.stringify({endpoint:references.length ? "/images/edits" : "/images/generations",nodeId:options.nodeId || "",source:options.source || "canvas",sourceId:options.sourceId || "",clientTaskId:options.clientTaskId || "",prompt,request:translationBody(config,await imageTranslationInput(config,prompt,references,params))})} : await createCanvasImageTaskRequest({ ...config, count: "1" }, prompt, references, params, options);
+    options.signal?.throwIfAborted();
+    options.onServerTask?.();
     const response = await fetch("/api/v1/canvas/image-tasks", request);
     if (!response.ok) {
         const error = await fetchErrorDetail(response, "图片任务创建失败");
@@ -1037,10 +1069,11 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
     return syncCanvasImageTask(payload.data);
 }
 
-export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasImageTask> {
+export async function pollCanvasImageTaskStatus(taskId: string, signal?: AbortSignal): Promise<CanvasImageTask> {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录后再使用云端渠道");
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(taskId)}`, {
+        signal,
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) {
@@ -1174,7 +1207,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
     let answer = "";
 
     try {
-        await withTimeout(IMAGE_REQUEST_TIMEOUT_SECONDS, async (signal) => {
+        await withTimeout(IMAGE_REQUEST_TIMEOUT_SECONDS, undefined, async (signal) => {
             const response = await fetch(aiApiUrl(config, "/chat/completions"), {
                 method: "POST",
                 headers: aiHeaders(config, "application/json"),
@@ -1183,7 +1216,11 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
             });
             if (!response.ok) {
                 const error = await fetchErrorDetail(response, "请求失败");
-                throw new ImageRequestError(error.message, error.detail);
+                throw new ImageRequestError(
+                    tokenDanceRecoveryMessage(channelProtocolForConfig(config) === "tokendance" ? response.headers.get("TokenDance-Recovery-Action") : null)
+                        || error.message,
+                    error.detail,
+                );
             }
             if (isEventStreamResponse(response)) {
                 await readJsonServerSentEvents(response, (event) => {
@@ -1246,6 +1283,7 @@ export async function fetchImageModels(config: AiConfig) {
         const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
             headers: {
                 Authorization: `Bearer ${config.apiKey}`,
+                ...modelChannelAttributionHeaders(channel?.protocol || ""),
             },
             timeout: IMAGE_REQUEST_TIMEOUT_SECONDS * 1000,
         });
@@ -1268,7 +1306,7 @@ async function requestGeminiImageSingle(config: AiConfig, prompt: string, refere
         references.length ? "/images/edits" : "/images/generations",
         body,
         params.timeoutSeconds,
-        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(
+        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, params.signal, (signal) => fetch(
             proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
             { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal },
         ))),
@@ -1492,7 +1530,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
         params.timeoutSeconds,
         () =>
             requestWithTransientRetry(() =>
-                withTimeout(params.timeoutSeconds, (signal) =>
+                withTimeout(params.timeoutSeconds, params.signal, (signal) =>
                     fetch(aiApiUrl(config, "/images/generations"), {
                         method: "POST",
                         headers: aiHeaders(config, "application/json"),

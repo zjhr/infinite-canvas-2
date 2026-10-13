@@ -10,6 +10,7 @@ type AICallLog struct {
 	ChannelID       string `json:"channelId" gorm:"index"`
 	ChannelName     string `json:"channelName"`
 	Status          int    `json:"status" gorm:"index"`
+	Failed          bool   `json:"failed" gorm:"-"`
 	DurationMs      int64  `json:"durationMs"`
 	Credits         float64 `json:"credits" gorm:"type:decimal(20,2)"`
 	RequestBody     string `json:"requestBody" gorm:"type:text"`

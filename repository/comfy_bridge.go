@@ -216,6 +216,18 @@ func SaveComfyBridgeRequest(request model.ComfyBridgeRequest) error {
 		return err
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
+		if request.TaskID != "" {
+			task := map[string]any{"image": &model.CanvasImageTask{}, "video": &model.VideoTask{}, "audio": &model.CanvasAudioTask{}}[request.Kind]
+			var state struct{ Status string }
+			if err := tx.Model(task).Clauses(clause.Locking{Strength: "UPDATE"}).Select("status").Where("id = ?", request.TaskID).Take(&state).Error; err != nil {
+				return err
+			}
+			if state.Status == "cancelled" {
+				current := time.Now()
+				request.Status, request.Error = "failed", "用户停止"
+				request.CompletedAt, request.CleanupReadyAt = &current, &current
+			}
+		}
 		var bridge model.ComfyBridge
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_scope = ? AND owner_id = ? AND enabled = ?", request.BridgeID, request.OwnerScope, request.OwnerID, true).First(&bridge).Error; err != nil {
 			return errors.New("Bridge 不存在或无权使用")

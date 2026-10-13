@@ -1,13 +1,59 @@
 package repository
 
-import "github.com/tigerowo/infinite-canvas/model"
+import (
+	"github.com/tigerowo/infinite-canvas/model"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+func SaveFailedTranslatedVideoTask(task model.VideoTask, refundLog model.CreditLog) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		updated := tx.Model(&model.VideoTask{}).Where("id = ? AND status NOT IN ?", task.ID, []string{"completed", "failed", "cancelled", "canceled"}).Select("*").Updates(&task)
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected == 0 || refundLog.Amount <= 0 {
+			return nil
+		}
+		user, found, err := refundUserCredits(tx, task.UserID, refundLog.Amount, refundLog.CreatedAt)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return gorm.ErrRecordNotFound
+		}
+		refundLog.Balance = user.Credits
+		return tx.Create(&refundLog).Error
+	})
+}
 
 func SaveVideoTask(task model.VideoTask) (model.VideoTask, error) {
 	db, err := DB()
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&task).Error; err != nil {
+		return task, err
+	}
+	update := db.Model(&model.VideoTask{}).Where("user_id = ? AND id = ? AND status <> ?", task.UserID, task.ID, "cancelled").Select("*").Updates(&task)
+	if update.Error == nil && update.RowsAffected == 0 {
+		update = db.First(&task, "user_id = ? AND id = ?", task.UserID, task.ID)
+	}
+	return task, update.Error
+}
+
+func UpdateVideoTask(task model.VideoTask) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Model(&model.VideoTask{}).
+		Where("id = ? AND status <> ?", task.ID, "cancelled").
+		Select("*").Updates(&task).Error
 }
 
 func GetVideoTask(id string) (model.VideoTask, bool, error) {

@@ -100,10 +100,6 @@ func DeleteUserCanvasImageTask(userID string, id string) error {
 	return repository.DeleteUserCanvasImageTask(strings.TrimSpace(userID), strings.TrimSpace(id))
 }
 
-func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) error {
-	return repository.DeleteUserCanvasTasks(strings.TrimSpace(userID), strings.TrimSpace(sourceID), nodeIDs)
-}
-
 func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {
 	task.UpdatedAt = now()
 	return repository.UpdateCanvasImageTask(task)

@@ -18,6 +18,7 @@ export type LocalModelChannel = {
     apiKey: string;
     models: string[];
     modelScripts?: Record<string, string>;
+    modelCapabilities?: ModelCapabilities;
     uploadApiKey?: string;
     bridgeId?: string;
     comfyUrl?: string;
@@ -93,7 +94,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelCapabilities?: ModelCapabilities; parameterTranslationModels?: string[]; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -105,6 +106,7 @@ export type AiConfig = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
+export type ModelCapabilities = Partial<Record<string, ModelCapability>>;
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -210,9 +212,9 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     const audioModels = filterChannelModelsByCapability(modelChannel.channels, "audio", models);
     const fallbackTextModel = validDefault(modelChannel.defaultTextModel, textModels) || preferredModel(textModels, isTextModelName) || textModels[0] || "";
     const fallbackModel = validDefault(modelChannel.defaultModel, textModels) || fallbackTextModel;
-    const fallbackImageModel = validDefault(modelChannel.defaultImageModel, imageModels) || preferredModel(imageModels, isImageModelName);
-    const fallbackVideoModel = validDefault(modelChannel.defaultVideoModel, videoModels) || preferredModel(videoModels, isVideoModelName);
-    const fallbackAudioModel = preferredModel(audioModels, isAudioModelName);
+    const fallbackImageModel = validDefault(modelChannel.defaultImageModel, imageModels) || preferredModel(imageModels, isImageModelName) || imageModels[0] || "";
+    const fallbackVideoModel = validDefault(modelChannel.defaultVideoModel, videoModels) || preferredModel(videoModels, isVideoModelName) || videoModels[0] || "";
+    const fallbackAudioModel = preferredModel(audioModels, isAudioModelName) || audioModels[0] || "";
     return {
         ...config,
         channelMode,
@@ -277,9 +279,7 @@ function isVideoModelName(model: string) {
         value.includes("wan/2-7-image-to-video") ||
         value.includes("wan/2-7-videoedit") ||
         value.includes("wan/2-7-r2v") ||
-        value.includes("sd2.0 720p") ||
-        value.includes("sd2.5 480p") ||
-        value.includes("sd2.5 720p") ||
+        (value.includes("sd") && !value.includes("sdxl")) ||
         (value.includes("grok-imagine") && (value.includes("/upscale") || value.includes("/extend")))
     );
 }
@@ -331,8 +331,9 @@ function isTextModelName(model: string) {
     return !isImageModelName(model) && !isVideoModelName(model) && !isAudioModelName(model);
 }
 
-export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "") {
+export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "", modelCapabilities: ModelCapabilities = {}) {
     if (!capability) return true;
+    if (Object.hasOwn(modelCapabilities, model)) return modelCapabilities[model] === capability;
     if (protocol === "autodl") {
         if (capability === "audio") return model === "indextts2-v1";
         return capability === "video" && (model.startsWith("minimax_h3_") || model === "wan2.2animate-v4-motion_retargeting");
@@ -353,18 +354,18 @@ export function modelMatchesCapability(model: string, capability?: ModelCapabili
     return isTextModelName(model);
 }
 
-export function filterModelsByCapability(models: string[], capability?: ModelCapability, protocol = "") {
-    return capability ? models.filter((model) => modelMatchesCapability(model, capability, protocol)) : models;
+export function filterModelsByCapability(models: string[], capability?: ModelCapability, protocol = "", modelCapabilities: ModelCapabilities = {}) {
+    return capability ? models.filter((model) => modelMatchesCapability(model, capability, protocol, modelCapabilities)) : models;
 }
 
-export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[] }>, capability: ModelCapability, allowedModels?: string[]) {
+export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[]; modelCapabilities?: ModelCapabilities }>, capability: ModelCapability, allowedModels?: string[]) {
     const allowed = allowedModels ? new Set(allowedModels) : null;
-    return normalizeModelList(channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? [] : filterModelsByCapability(channel.models, capability, channel.protocol || ""))).filter((model) => !allowed || allowed.has(model));
+    return normalizeModelList(channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? [] : filterModelsByCapability(channel.models, capability, channel.protocol || "", channel.modelCapabilities))).filter((model) => !allowed || allowed.has(model));
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     if (!capability) return config.models;
-    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ protocol: channel.protocol, models: channel.models || [] })) : normalizeLocalChannels(config);
+    const channels = config.channelMode === "remote" ? config.publicChannels.map((channel) => ({ ...channel, models: channel.models || [] })) : normalizeLocalChannels(config);
     return filterChannelModelsByCapability(channels, capability, config.models);
 }
 
@@ -372,10 +373,11 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
     const configuredModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
     const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
     const selectableModels = selectableModelsByCapability(config, capability);
-    const matches = (model: string | undefined) => Boolean(model && (selectableModels.length ? selectableModels.includes(model) : modelMatchesCapability(model, capability)));
+    const channels = config.channelMode === "remote" ? config.publicChannels : config.localChannels;
+    const matches = (model: string | undefined) => Boolean(model && (selectableModels.length || channels.some((channel) => channel.models?.includes(model) && channel.modelCapabilities?.[model]) ? selectableModels.includes(model) : modelMatchesCapability(model, capability)));
     if (matches(currentModel)) return currentModel!;
     if (matches(configuredModel)) return configuredModel;
-    return selectableModels[0] || fallbackModel;
+    return selectableModels[0] || (matches(fallbackModel) ? fallbackModel : "");
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {
@@ -533,6 +535,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
             models,
             // 模型被移除后其挂载的脚本一并清理，避免孤儿脚本残留在「脚本」入口上
             modelScripts: channel.modelScripts && typeof channel.modelScripts === "object" ? Object.fromEntries(Object.entries(channel.modelScripts).filter(([model, value]) => typeof value === "string" && models.includes(model))) : undefined,
+            modelCapabilities: channel.modelCapabilities || {},
         ...(isWorkflowProtocol(channel.protocol || "") ? {
             uploadApiKey: channel.uploadApiKey || "",
             bridgeId: channel.bridgeId || "",
@@ -552,6 +555,7 @@ export function channelIdForActiveModel(config: AiConfig) {
     const channels = (config.channelMode === "remote" ? config.publicChannels : normalizeLocalChannels(config)).filter((channel) => !isWorkflowProtocol(channel.protocol || ""));
     const selectedChannelId = config.model === config.imageModel ? config.imageChannelId : config.model === config.videoModel ? config.videoChannelId : config.model === config.audioModel ? config.audioChannelId : config.model === config.textModel ? config.textChannelId : "";
     const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
+    if (config.activeChannelId && channels.some((channel) => channel.id === config.activeChannelId && channel.models?.includes(config.model))) return config.activeChannelId;
     if (selectedChannel?.protocol === "gemini" || selectedChannel?.protocol === "autodl") return selectedChannelId;
     if (!selectedChannel) {
         const geminiChannel = channels.find((channel) => channel.protocol === "gemini" && (channel.models || []).includes(config.model));
