@@ -16,14 +16,29 @@ AGENT_URL="http://127.0.0.1:3210/config"
 
 is_up() { curl -fsS --max-time 3 -o /dev/null "$1" 2>/dev/null; }
 
+# 服务探活失败但端口被其他进程占用时，直接报错退出，避免盲目启动后端口冲突
+fail_if_port_busy() { # $1=端口 $2=服务名
+  local pids cmd
+  pids="$(lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -n "$pids" ]; then
+    cmd="$(ps -o comm= -p "${pids//$'\n'/,}" 2>/dev/null | head -1)"
+    echo "[失败] 端口 $1 被占用 (PID: ${pids//$'\n'/ }, 进程: ${cmd:-未知})，$2 无法启动"
+    echo "       可执行 ./dev.sh stop 释放端口，或手动结束该进程"
+    return 1
+  fi
+  return 0
+}
+
 start_backend() {
   if is_up "$BACKEND_URL"; then echo "[跳过] Go 后端已在运行 (:8080)"; return; fi
+  fail_if_port_busy 8080 "Go 后端" || return 1
   echo "[启动] Go 后端 (:8080) ..."
   (cd "$ROOT" && nohup go run . >"$LOG_DIR/backend.log" 2>&1 &)
 }
 
 start_web() {
   if is_up "$WEB_URL"; then echo "[跳过] Next.js 已在运行 (:3000)"; return; fi
+  fail_if_port_busy 3000 "Next.js" || return 1
   if [ ! -d "$ROOT/web/node_modules" ]; then
     echo "[安装] web 依赖 (bun install) ..."
     if ! (cd "$ROOT/web" && bun install >"$LOG_DIR/web-install.log" 2>&1); then
@@ -37,6 +52,7 @@ start_web() {
 
 start_agent() {
   if is_up "$AGENT_URL"; then echo "[跳过] canvas-agent 已在运行 (:3210)"; return; fi
+  fail_if_port_busy 3210 "canvas-agent" || return 1
   if [ ! -d "$ROOT/canvas-agent/node_modules" ]; then
     echo "[安装] canvas-agent 依赖 (npm install) ..."
     if ! (cd "$ROOT/canvas-agent" && npm install --no-audit --no-fund >"$LOG_DIR/agent-install.log" 2>&1); then

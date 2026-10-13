@@ -26,6 +26,23 @@ export type VideoProgressHandler = (progress: number, task: VideoResponse) => vo
 export type VideoTaskCreateOptions = { clientTaskId?: string; source?: "video-workbench" | "canvas"; sourceId?: string };
 export const VIDEO_POLL_INTERVAL_MS = 5000;
 
+// 上游冷启动时首次创建任务常返回 429/5xx（如 Agnes 503），自动重试两次
+async function postVideoWithTransientRetry<T>(url: string, data: unknown, headers: Record<string, string>, retries = 2) {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            return await axios.post<T>(url, data, { headers });
+        } catch (error) {
+            const status = axios.isAxiosError(error) ? error.response?.status || 0 : 0;
+            if (!isTransientVideoStatus(status) || attempt >= retries) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        }
+    }
+}
+
+function isTransientVideoStatus(status: number) {
+    return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
 export class VideoRequestError extends Error {
     detail?: string;
 
@@ -129,7 +146,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         const requestBody = !accountProxy && isGeminiConfig(config, model) ? withoutVideoModel(body) : body;
         const created = directProvider
             ? await (await import("@/services/api/direct-ai")).createDirectVideoTask(config, directProvider, body)
-            : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers })).data);
+            : unwrapVideoResponseForConfig(config, model, (await postVideoWithTransientRetry<ApiVideoResponse>(createUrl, requestBody, headers)).data);
         if (!created.id && !created.video_id) throw new Error("视频接口没有返回任务 ID");
         const task = await syncGeneratedVideo(created, config);
         if (typeof task.progress === "number") onProgress?.(task.progress, task);
