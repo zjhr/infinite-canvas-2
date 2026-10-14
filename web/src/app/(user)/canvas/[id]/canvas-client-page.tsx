@@ -133,6 +133,8 @@ const CONNECTION_NODE_HIT_PADDING = 32;
 const NODE_STATUS_LOADING = "loading" as const;
 const NODE_STATUS_SUCCESS = "success" as const;
 const NODE_STATUS_ERROR = "error" as const;
+// 视频轮询连续失败达到该次数（按 5s 间隔约 50 秒）后把节点置为失败，避免上游持续 500 时无限 loading
+const VIDEO_POLL_MAX_FAILURES = 10;
 const AGENT_PRIMARY_SCRIPT_NODE_SIZE = { width: 550, height: 600 };
 const VIDEO_PREVIEW_CONTROL_CLASS = "flex size-9 items-center justify-center rounded-lg text-white transition-colors hover:bg-white/10";
 const IMAGE_PROMPT_REVERSE_PRESET = `请根据参考图片反推一段适合用于 AI 生图的提示词。
@@ -505,6 +507,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const runningRequestRef = useRef<symbol | null>(null);
     const nodeTaskRunsRef = useRef(new Map<string, CanvasNodeTaskRun>());
     const pollingVideoNodeIdsRef = useRef(new Map<string, AbortController>());
+    const videoPollFailureCountsRef = useRef(new Map<string, number>());
     const pollingImageNodeIdsRef = useRef(new Map<string, AbortController>());
     const pollingAudioNodeIdsRef = useRef(new Map<string, AbortController>());
     const hasLoadingTimedNodes = nodes.some((node) => node.metadata?.status === NODE_STATUS_LOADING && !node.metadata.content && (node.type === CanvasNodeType.Video || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Audio));
@@ -779,12 +782,24 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     ? getWorkflowTask(workflowToken, taskId, controller.signal).then((task) => workflowVideoTask(task, workflowToken))
                     : pollVideoGenerationTaskStatus(generationConfig, canvasVideoTaskFromMetadata(node.metadata), controller.signal))
                     .then((task) => {
+                        videoPollFailureCountsRef.current.delete(node.id);
                         if (controller.signal.aborted) return;
                         rememberNodeTask(node.id, node.metadata?.clientTaskId, task);
                         if (!isNodeTaskActive(node.id, node.metadata?.clientTaskId)) return;
                         setNodes((prev) => applyCanvasVideoTaskUpdate(prev, node.id, task, generationConfig, node.metadata?.startedAt || Date.now(), { width: node.width, height: node.height }, node.metadata?.clientTaskId));
                     })
-                    .catch(() => undefined)
+                    .catch((error) => {
+                        // 轮询接口持续失败（如上游 500）时不能无限 loading，连续失败达到阈值后把节点置为失败
+                        if (controller.signal.aborted) return;
+                        const count = (videoPollFailureCountsRef.current.get(node.id) || 0) + 1;
+                        if (count < VIDEO_POLL_MAX_FAILURES) {
+                            videoPollFailureCountsRef.current.set(node.id, count);
+                            return;
+                        }
+                        videoPollFailureCountsRef.current.delete(node.id);
+                        const errorDetails = error instanceof Error ? error.message : "视频任务轮询失败";
+                        setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                    })
                     .finally(() => {
                         pollingVideoNodeIdsRef.current.delete(node.id);
                     });
