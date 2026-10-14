@@ -2,7 +2,7 @@
 
 import { CopyOutlined } from "@ant-design/icons";
 import { Button, Input, Modal, Select, Space, Typography } from "antd";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { getScriptAuthoringPrompt, getScriptReturn, getScriptTemplates, getScriptVariables } from "@/services/api/model-script";
@@ -22,6 +22,14 @@ export function ModelScriptEditorModal({ channel, onSave, onCancel }: ModelScrip
     const [draft, setDraft] = useState(() => scripts[model]?.trim() || "");
     const variables = useMemo(() => getScriptVariables(), []);
     const templates = useMemo(() => getScriptTemplates(), []);
+
+    // 渠道模型列表变化（换地址重新拉取、选择确认）后，选中模型不在列表中时自动切换
+    useEffect(() => {
+        if (!model || models.includes(model)) return;
+        const next = models.find((item) => scripts[item]?.trim()) || models[0];
+        setModel(next);
+        setDraft(scripts[next]?.trim() || "");
+    }, [models, model, scripts]);
 
     const switchModel = (nextModel: string) => {
         setModel(nextModel);
